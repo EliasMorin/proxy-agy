@@ -1,0 +1,114 @@
+model_list:
+  # Gemini 3.8 Flash (High / Thinking - Primary Model)
+  - model_name: gemini-3.8-flash
+    litellm_params:
+      model: openai/gemini-3.8-flash
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: gemini-3.8-flash
+    litellm_params:
+      model: openai/gemini-3.8-flash
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  - model_name: gemini-3.8-flash-high
+    litellm_params:
+      model: openai/gemini-3.8-flash-high
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: gemini-3.8-flash-high
+    litellm_params:
+      model: openai/gemini-3.8-flash-high
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  # Gemini 3.8 Flash (Low - Fast Utility)
+  - model_name: gemini-3.8-flash-low
+    litellm_params:
+      model: openai/gemini-3.8-flash-low
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: gemini-3.8-flash-low
+    litellm_params:
+      model: openai/gemini-3.8-flash-low
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  # Claude Sonnet 4.6 (Thinking)
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: openai/claude-sonnet-4-6
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: openai/claude-sonnet-4-6
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  # Claude Opus 4.6 (Thinking)
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: openai/claude-opus-4-6
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: openai/claude-opus-4-6
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  # GPT-OSS 120B
+  - model_name: gpt-oss-120b
+    litellm_params:
+      model: openai/gpt-oss-120b
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: gpt-oss-120b
+    litellm_params:
+      model: openai/gpt-oss-120b
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  # Gemini 4 Argon
+  - model_name: gemini-4-argon
+    litellm_params:
+      model: openai/gemini-4-argon
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: gemini-4-argon
+    litellm_params:
+      model: openai/gemini-4-argon
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  - model_name: gemini-4-argon-high
+    litellm_params:
+      model: openai/gemini-4-argon-high
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: gemini-4-argon-high
+    litellm_params:
+      model: openai/gemini-4-argon-high
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+  - model_name: argon
+    litellm_params:
+      model: openai/argon
+      api_base: http://172.17.0.1:8000/v1
+      api_key: sk-dummy
+  - model_name: argon
+    litellm_params:
+      model: openai/argon
+      api_base: http://172.17.0.1:8001/v1
+      api_key: sk-dummy
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 1800
+  fallbacks:
+    - gemini-4-argon: [gemini-3.8-flash]
+    - gemini-4-argon-high: [gemini-3.8-flash]
+    - argon: [gemini-3.8-flash]

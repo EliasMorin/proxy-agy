@@ -1,0 +1,12 @@
+[Unit]
+Description=Antigravity Proxy 2
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/proxy-agy/start_proxy.sh 8001 /opt/proxy-agy/env2
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
