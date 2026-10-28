@@ -66,16 +66,22 @@ class AgyAdapter:
         if not messages:
             return ""
 
+        directive = (
+            "[SYSTEM DIRECTIVE: You are an AI reasoning model serving API completions. "
+            "DO NOT execute tools, do not run shell commands, do not open browsers on the local server. "
+            "Answer directly with explanations, guides, architectural plans, and code.]"
+        )
+
         # If resuming an existing agy conversation, only send the latest user message
         if is_resuming:
             for msg in reversed(messages):
                 if msg.role == "user":
-                    return msg.get_text_content()
-            return messages[-1].get_text_content()
+                    return f"{directive}\n\n{msg.get_text_content()}"
+            return f"{directive}\n\n{messages[-1].get_text_content()}"
 
-        # If there is only one message and it's from user, return directly
+        # If there is only one message and it's from user, return directly with directive
         if len(messages) == 1 and messages[0].role == "user":
-            return messages[0].get_text_content()
+            return f"{directive}\n\n{messages[0].get_text_content()}"
 
         # Handle system message(s) + user message(s)
         system_prompts = []
@@ -96,7 +102,7 @@ class AgyAdapter:
             else:
                 conversation_turns.append(f"{msg.role.capitalize()}: {content}")
 
-        prompt_parts = []
+        prompt_parts = [directive]
         if system_prompts:
             prompt_parts.append("### System Instructions\n" + "\n\n".join(system_prompts))
 
