@@ -1,15 +1,6 @@
 # Environment variables & local secrets
 .env
 .env.local
-config.ini
-*.key
-*.pem
-
-# Account environments & local storage
-env*/
-instance/
-*.sqlite
-*.bak
 
 # Service runtime logs & PID
 proxy.pid
@@ -41,3 +32,10 @@ env/
 .vscode/
 *.swp
 *.swo
+
+env1/
+env2/
+instance/
+*.png
+*.rbxl
+

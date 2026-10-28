@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     AGY_BIN_PATH: str = os.getenv("AGY_BIN_PATH") or shutil.which("agy") or os.path.expanduser("~/.local/bin/agy")
     DEFAULT_MODEL: str = "Gemini 3.8 Flash (High)"
     DEFAULT_EFFORT: str = "high"
-    DEFAULT_WORKSPACE: str = os.getcwd()
+    DEFAULT_WORKSPACE: str = "/tmp"
     
     # Execution behavior
     DANGEROUSLY_SKIP_PERMISSIONS: bool = True
