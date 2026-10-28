@@ -102,7 +102,7 @@ async def chat_completions(
                 final_usage = UsageInfo()
                 has_error = False
 
-                stream_iter = agy_adapter.run_stream(
+                async for event in agy_adapter.run_stream(
                     messages=req.messages,
                     model=req.model,
                     effort=effort,
@@ -110,18 +110,7 @@ async def chat_completions(
                     workspace_dir=workspace_dir,
                     dangerously_skip_permissions=dangerously_skip_permissions,
                     mode=req.mode,
-                )
-
-                while True:
-                    try:
-                        event = await asyncio.wait_for(stream_iter.__anext__(), timeout=4.0)
-                    except asyncio.TimeoutError:
-                        # SSE keepalive comment to prevent socket read timeouts in LiteLLM and proxies
-                        yield ": keepalive\n\n"
-                        continue
-                    except StopAsyncIteration:
-                        break
-
+                ):
                     event_type = event.get("type")
 
                     if event_type == "content":
@@ -150,7 +139,10 @@ async def chat_completions(
                                 choices=[
                                     ChatCompletionChunkChoice(
                                         index=0,
-                                        delta=DeltaMessage(reasoning_content=delta_thinking),
+                                        delta=DeltaMessage(
+                                            content="" if not settings.EMBED_THINKING_IN_TEXT else f"<think>{delta_thinking}</think>",
+                                            reasoning_content=delta_thinking
+                                        ),
                                         finish_reason=None
                                     )
                                 ]
