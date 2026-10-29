@@ -284,6 +284,7 @@ class AgyAdapter:
                     stderr=asyncio.subprocess.PIPE,
                     cwd=cwd,
                     preexec_fn=preexec,
+                    limit=16 * 1024 * 1024,
                 )
                 payload = json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
                 try:
