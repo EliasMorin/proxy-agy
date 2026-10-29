@@ -1,219 +1,149 @@
-# Antigravity CLI OpenAI-Compatible Proxy (AGY 本地中转服务)
+# Proxy-AGY — Passerelle OpenAI Haute Performance pour Antigravity CLI (`agy`)
 
-这是一个运行在本地的高性能 Python 中转服务，将 Google Antigravity CLI (`agy`) 的强大能力封装为标准的 **OpenAI 兼容 API 接口** (`/v1/chat/completions`, `/v1/models` 等)。
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/framework-FastAPI-009688.svg)](https://fastapi.tiangolo.com)
+[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991.svg)](https://platform.openai.com/docs/api-reference)
+[![OpenClaw Ready](https://img.shields.io/badge/agent-OpenClaw%20Ready-ff4757.svg)](https://openclaw.ai)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-有了这个中转服务，你可以直接在任何支持自定义 OpenAI API 的客户端（如 **Cherry Studio**, **NextChat**, **OpenWebUI**, **Cursor**, **Chatbox**, **LibreChat**, **Dify**, **LangChain**, **LlamaIndex** 以及官方 **OpenAI Python SDK**）中直接使用 `agy` CLI 驱动的模型和能力！
+**Proxy-AGY** est une passerelle Python asynchrone haute performance encapsulant le CLI **Google Antigravity (`agy`)** sous forme d'une API standard **compatible OpenAI** (`/v1/chat/completions`, `/v1/models`).
 
----
-
-## 🌟 核心特性
-
-- ⚡ **完全兼容 OpenAI 标准协议**:
-  - `POST /v1/chat/completions`: 支持单轮/多轮对话，支持 **流式传输 (Stream SSE)** 与 **非流式 JSON** 返回。
-  - `GET /v1/models` & `GET /v1/models/{model}`: 自动列出支持的模型及友好别名。
-  - `POST /v1/completions`: 兼容旧版纯文本补全端点。
-- 🔐 **开箱即用的登录引导 (Auth Flow)**:
-  - 新用户初次启动时，若检测到未登录，自动提供 **终端交互登录** 或 **网页端可视化一键粘贴 Token 激活**。
-  - 支持 `python3 main.py --login` 或 `./start.sh login` 随时触发重新登录。
-- 🧠 **思考过程与推理流支持 (Reasoning / Thinking)**:
-  - 自动将 `agy` 产生的 thinking 过程通过标准 `delta.reasoning_content` (DeepSeek-R1 / o1 / o3 格式) 实时流式推送至前端渲染。
-- 🔄 **智能模型映射 & 别名**:
-  - 支持直接输入标准别名（如 `gemini-3.7-flash`, `gemini-3.1-pro`, `claude-3-7-sonnet`, `gpt-4o` 等），自动映射到 `agy` 对应的原生模型全称。
-- 🛡️ **异步高性能 & 进程保护**:
-  - 基于 FastAPI + Asyncio 异步子进程，低延迟流式响应；客户端断开连接时自动终止后台 CLI 进程，杜绝进程泄漏。
-- 💬 **会话连续性 (Conversation Continuity)**:
-  - 支持通过 `X-Conversation-Id` Header 或请求体中的 `conversation_id` 继承复用 CLI 的历史会话。
+Conçu pour alimenter des agents autonomes comme **OpenClaw**, des routeurs de modèles comme **LiteLLM**, ainsi que des interfaces utilisateur (Webchat, Cursor, LibreChat, NextChat, Dify), il assure une diffusion fluide en continu (SSE), la transmission en direct des traces de raisonnement (*thinking tokens*), et une haute disponibilité via un cluster multi-instances.
 
 ---
 
-## 📂 项目结构
+## 🏗️ Architecture Globale
 
 ```
-proxy-agy/
-├── app/
-│   ├── __init__.py
-│   ├── auth.py          # 认证检测、终端交互与 Token 验证
-│   ├── config.py        # 配置管理与模型别名映射
-│   ├── schemas.py       # OpenAI 请求与响应 Pydantic 模型
-│   ├── agy_adapter.py   # agy CLI 异步子进程与流式解析适配器
-│   ├── routes/
-│   │   ├── __init__.py
-│   │   ├── auth.py      # /v1/auth/status 与 /v1/auth/login 路由
-│   │   ├── chat.py      # /v1/chat/completions 路由（带未登录拦截保护）
-│   │   └── models.py    # /v1/models 路由
-│   └── server.py        # FastAPI 实例、CORS 中间件与 Web 登录/状态面板
-├── main.py              # 命令行启动入口（支持 --login, --check-auth 等）
-├── start.sh             # 便捷服务管理脚本（start, stop, status, login）
-├── test_client.py       # 测试客户端脚本
-├── requirements.txt     # 依赖项清单
-├── .env.example         # 环境变量示例
-└── README.md            # 使用文档
+┌─────────────────────────────────────────────────────────────┐
+│ Clients : OpenClaw (Gateway / Webchat), Cursor, NextChat... │
+└──────────────────────────────┬──────────────────────────────┘
+                               │  Requêtes OpenAI v1
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 LiteLLM Proxy (Port 4001)                   │
+│         Load Balancing round-robin & Fallbacks auto         │
+└───────────────┬─────────────────────────────┬───────────────┘
+                │                             │
+    HTTP :8000  ▼                 HTTP :8001  ▼
+┌───────────────────────────────┐ ┌───────────────────────────────┐
+│     Proxy-AGY Instance 1      │ │     Proxy-AGY Instance 2      │
+│     (HOME=/opt/.../env1)      │ │     (HOME=/opt/.../env2)      │
+└───────────────┬───────────────┘ └───────────────┬───────────────┘
+                │ IPC Subprocess                  │ IPC Subprocess
+                ▼                                 ▼
+┌───────────────────────────────┐ ┌───────────────────────────────┐
+│     agy CLI (Google Auth 1)   │ │     agy CLI (Google Auth 2)   │
+└───────────────────────────────┘ └───────────────────────────────┘
 ```
 
 ---
 
-## 🚀 快速启动与登录
+## ✨ Fonctionnalités Clés
 
-### 1. 安装依赖
+- **⚡ Compatibilité Totale OpenAI REST & SSE :**
+  - Endpoint `POST /v1/chat/completions` avec support complet du streaming Server-Sent Events (`stream: true`) et du mode synchrone JSON.
+  - Endpoint `GET /v1/models` dynamique exposant les modèles officiels disponibles sur le palier de compte (`Gemini 3.8 Flash`, `Claude Sonnet 4.6`, `Claude Opus 4.6`, `GPT-OSS 120B`, etc.).
+- **🧠 Support Intégral du Raisonnement (*Reasoning / Thinking Tokens*) :**
+  - Transmission des réflexions en temps réel via le standard `delta.reasoning_content` (supporté nativement par OpenClaw, DeepSeek-R1, o1/o3 et Ollama).
+  - Mode hybride avec balises `<think>...</think>` activable à la demande.
+- **🛡️ Tampon Pipe Haute Capacité (16 Mo) :**
+  - Dépassement de la limite standard Python `asyncio` (64 Ko) avec un buffer de 16 Mo pour garantir l'absence de saturation ou de gel lors de réponses denses (code volumineux, traces d'analyse complexes).
+- **🔄 Cluster Multi-Instance & Zero-Downtime :**
+  - Déploiement parallélisé sur plusieurs environnements distincts (`env1`, `env2`) avec leurs propres sessions et jetons Google.
+  - Répartition de charge automatique via LiteLLM avec bascule transparente (*fallbacks*).
+- **🔒 Directive Pure LLM :**
+  - Injection automatique de garde-fous interdisant au moteur CLI local de spawner des navigateurs graphiques ou des commandes bash intempestives lors d'appels API.
+- **🛡️ Nettoyage Propre des Processus (Anti-Leak) :**
+  - Annulation immédiate (`SIGTERM` puis `SIGKILL`) de l'arbre complet de sous-processus `agy` dès que le client ferme sa connexion HTTP, éliminant les processus zombies.
 
-确保本地已安装 Python 3.9+ 以及 `agy` 命令行工具：
+---
+
+## 🚀 Démarrage Rapide
+
+### 1. Prérequis
+- Python 3.10 ou supérieur
+- Google Antigravity CLI (`agy`) installé et connecté (`agy auth login`)
+
+### 2. Installation
 
 ```bash
-cd /Users/xm15118057/tyre/proxy-agy
+git clone https://github.com/EliasMorin/proxy-agy.git
+cd proxy-agy
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. 启动服务
-
-**直接运行：**
-```bash
-python3 main.py
-```
-
-- 若你是**全新用户尚未登录**：
-  - 终端将提示进入交互式登录，自动打开浏览器登录链接，并在终端粘贴 Token 完成授权。
-  - 或者直接访问网页 `http://127.0.0.1:8000/` 点击授权链接并粘贴 Token 一键激活！
-
-### 3. 服务管理命令 (`./start.sh`)
-
-| 操作 | 命令 | 说明 |
-| :--- | :--- | :--- |
-| **后台启动** | `./start.sh start` | 在后台静默运行中转服务 |
-| **前台调试启动** | `./start.sh` 或 `python3 main.py` | 在前台运行并输出完整日志 |
-| **交互式登录** | `./start.sh login` | 专门进入 Antigravity CLI 登录引导 |
-| **检查登录状态** | `./start.sh check-auth` | 检查当前 CLI 是否处于登录状态 |
-| **查看服务状态** | `./start.sh status` | 检查后台服务 PID 与 Base URL |
-| **查看实时日志** | `./start.sh logs` | 跟踪 `proxy.log` 日志输出 |
-| **停止后台服务** | `./start.sh stop` | 停止后台运行的代理进程 |
-| **重启后台服务** | `./start.sh restart` | 平滑重启服务 |
-
----
-
-## 📋 支持的模型与别名对照
-
-| 请求使用的 Model 别名 | 实际映射的 AGY CLI 模型 | 特性说明 |
-| :--- | :--- | :--- |
-| `gemini-3.7-flash` / `gemini-3.7-flash-high` | `Gemini 3.7 Flash (High)` | 默认推荐，速度极快且具备深度思考 |
-| `gemini-3.7-flash-medium` | `Gemini 3.7 Flash (Medium)` | 中度思考预算 |
-| `gemini-3.7-flash-low` | `Gemini 3.7 Flash (Low)` | 低延迟轻量推理 |
-| `gemini-3.6-flash` | `Gemini 3.6 Flash (High)` | Gemini 3.6 系列 |
-| `gemini-3.5-flash` | `Gemini 3.5 Flash (High)` | Gemini 3.5 系列 |
-| `gemini-3.1-pro` / `gemini-pro` | `Gemini 3.1 Pro (High)` | 复杂代码与强逻辑推理 |
-| `claude-3-7-sonnet` / `claude-sonnet` | `Claude Sonnet 4.6 (Thinking)` | 包含深度 Thinking 链路 |
-| `claude-3-opus` / `claude-opus` | `Claude Opus 4.6 (Thinking)` | 深度理解与写作 |
-| `gpt-4o` / `gpt-oss` / `gpt-oss-120b` | `GPT-OSS 120B (Medium)` | 开源百亿级大模型 |
-
----
-
-## 💻 接入客户端指南
-
-### 1. Python (OpenAI SDK)
-
-```python
-from openai import OpenAI
-
-# 将 base_url 指向本地中转服务
-client = OpenAI(
-    base_url="http://127.0.0.1:8000/v1",
-    api_key="none"  # 未开启 --api-key 时可填任意非空字符串
-)
-
-# 流式调用
-response = client.chat.completions.create(
-    model="gemini-3.7-flash",
-    messages=[
-        {"role": "system", "content": "You are a professional software architect."},
-        {"role": "user", "content": "用Python写一个简单的异步HTTP服务器"}
-    ],
-    stream=True
-)
-
-for chunk in response:
-    delta = chunk.choices[0].delta
-    # 打印思考过程（若客户端支持）
-    if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-        print(f"[思考] {delta.reasoning_content}", end="", flush=True)
-    # 打印正文内容
-    if delta.content:
-        print(delta.content, end="", flush=True)
-```
-
-### 2. cURL 调用
+### 3. Lancement Unique (Mode Simple)
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gemini-3.7-flash",
-    "messages": [
-      {"role": "user", "content": "你好，请写一个快速排序。"}
-    ],
-    "stream": true
-  }'
+# Lancement direct sur le port 8000
+./start.sh run
 ```
 
-### 3. Cherry Studio / NextChat / OpenWebUI / Cursor 配置
-
-- **接口类型**: `OpenAI`
-- **Base URL**: `http://127.0.0.1:8000/v1`
-- **API Key**: 留空或填写 `sk-none`
-- **模型**: `gemini-3.7-flash`, `gemini-3.1-pro`, `claude-3-7-sonnet`, `gpt-4o` 等。
+Accédez au tableau de bord et à l'interface de test Playground sur `http://localhost:8000`.
 
 ---
 
-## 🧪 运行测试
+## 🏛️ Déploiement en Production (Cluster Multi-Instance)
 
-```bash
-python3 test_client.py
-```
+Pour un usage intensif avec **OpenClaw**, il est recommandé d'exécuter deux instances isolées supervisées par `systemd` derrière **LiteLLM**.
 
-将依次测试：
-1. 认证状态检查 (`/v1/auth/status`)
-2. 可用模型列表获取 (`/v1/models`)
-3. 非流式单轮对话 (`/v1/chat/completions`)
-4. 流式传输与 Token 输出 (SSE)
+### 1. Scripts de démarrage (`systemd`)
 
----
+Copiez les unités systemd fournies dans [`deploy/`](./deploy/) vers `/etc/systemd/system/` :
 
-## 🚢 Multi-Instance & LiteLLM / OpenClaw Deployment
-
-Pour déployer en production avec équilibrage de charge et haute disponibilité (ex: pour OpenClaw via LiteLLM) :
-
-### 1. Services Systemd Multi-Instances
-Deux services d'arrière-plan distincts tournent sur les ports `8000` et `8001` avec des environnements isolés :
 ```bash
 sudo cp deploy/proxy-agy-1.service /etc/systemd/system/
 sudo cp deploy/proxy-agy-2.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now proxy-agy-1 proxy-agy-2
+sudo systemctl enable --now proxy-agy-1.service proxy-agy-2.service
 ```
 
-### 2. Routeur LiteLLM
-Le fichier `deploy/litellm_config.yaml` configure la répartition de charge (`simple-shuffle`), la gestion des timeouts et les fallbacks automatiques :
-```yaml
-router_settings:
-  routing_strategy: simple-shuffle
-  num_retries: 2
-  fallbacks:
-    - gemini-4-argon: ["gemini-3.8-flash"]
-    - gemini-4-argon-high: ["gemini-3.8-flash"]
+### 2. Configuration LiteLLM
+
+Lancez le conteneur LiteLLM avec le fichier [`deploy/litellm_config.yaml`](./deploy/litellm_config.yaml) :
+
+```bash
+docker run -d \
+  --name litellm \
+  -p 4001:4000 \
+  -v $(pwd)/deploy/litellm_config.yaml:/app/config.yaml \
+  ghcr.io/berriai/litellm:main-latest \
+  --config /app/config.yaml --port 4000
 ```
 
-### 3. OpenClaw
-Dans `openclaw.json`, configurez le provider OpenAI pointant sur le port LiteLLM (4001) :
+### 3. Connexion à OpenClaw
+
+Intégrez l'URL du proxy dans votre configuration `openclaw.json` (voir extrait dans [`deploy/openclaw_config_snippet.json`](./deploy/openclaw_config_snippet.json)) :
+
 ```json
 {
   "models": {
+    "mode": "replace",
     "providers": {
       "openai": {
         "baseUrl": "http://127.0.0.1:4001/v1",
-        "apiKey": "sk-dummy"
+        "apiKey": "sk-antigravity-local-bypass-litellm",
+        "timeoutSeconds": 600,
+        "models": [
+          {
+            "id": "gemini-3.8-flash",
+            "name": "Gemini 3.8 Flash (Réflexion)",
+            "contextWindow": 1000000,
+            "maxTokens": 64000,
+            "reasoning": true
+          },
+          {
+            "id": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash Low (Rapide)",
+            "contextWindow": 1000000,
+            "maxTokens": 64000,
+            "reasoning": true
+          }
+        ]
       }
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": "openai/gemini-3.8-flash"
     }
   }
 }
@@ -221,5 +151,34 @@ Dans `openclaw.json`, configurez le provider OpenAI pointant sur le port LiteLLM
 
 ---
 
-## 📄 License
-MIT License
+## 📡 Modèles Supportés
+
+| Identifiant API | Modèle Cible AGY | Profil |
+| :--- | :--- | :--- |
+| `gemini-3.8-flash` | Gemini 3.8 Flash (High) | Réflexion avancée & vitesse optimale |
+| `gemini-3.8-flash-low` | Gemini 3.8 Flash (Low) | Mode rapide sans latence de réflexion |
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 (Thinking) | Raisonnement de pointe & code complexe |
+| `claude-opus-4-6` | Claude Opus 4.6 (Thinking) | Analyse exhaustive & architecture |
+| `gpt-oss-120b` | GPT-OSS 120B (Medium) | Modèle ouvert open-weights |
+| `gemini-4-argon` | Gemini 4 Argon | Fallback automatique vers Flash si palier standard |
+
+---
+
+## 🛠️ Variables d'Environnement
+
+Configurez les variables via votre fichier `.env` ou directement dans l'environnement :
+
+| Variable | Défaut | Description |
+| :--- | :--- | :--- |
+| `PORT` | `8000` | Port d'écoute du serveur HTTP |
+| `HOST` | `0.0.0.0` | Adresse de liaison réseau |
+| `DEFAULT_WORKSPACE` | `/tmp` | Dossier d'exécution neutre pour le CLI |
+| `AGY_BIN_PATH` | `~/.local/bin/agy` | Emplacement du binaire Antigravity |
+| `API_KEY` | *(optionnel)* | Clé d'API Bearer pour sécuriser les appels |
+| `INCLUDE_REASONING_CONTENT` | `true` | Inclut `reasoning_content` dans les deltas SSE |
+
+---
+
+## 📄 Licence
+
+Ce projet est sous licence [MIT](./LICENSE).

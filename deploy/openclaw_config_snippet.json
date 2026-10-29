@@ -1,0 +1,62 @@
+{
+  "models": {
+    "mode": "replace",
+    "providers": {
+      "openai": {
+        "baseUrl": "http://127.0.0.1:4001/v1",
+        "apiKey": "sk-antigravity-local-bypass-litellm",
+        "timeoutSeconds": 600,
+        "models": [
+          {
+            "id": "gemini-3.8-flash",
+            "name": "Gemini 3.8 Flash (Réflexion)",
+            "contextWindow": 1000000,
+            "maxTokens": 64000,
+            "reasoning": true
+          },
+          {
+            "id": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash Low (Rapide)",
+            "contextWindow": 1000000,
+            "maxTokens": 64000,
+            "reasoning": true
+          },
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6 (Thinking)",
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "reasoning": true
+          },
+          {
+            "id": "claude-opus-4-6",
+            "name": "Claude Opus 4.6 (Thinking)",
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "reasoning": true
+          },
+          {
+            "id": "gpt-oss-120b",
+            "name": "GPT-OSS 120B",
+            "contextWindow": 128000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "gemini-4-argon",
+            "name": "Gemini 4 Argon (Fallback Flash)",
+            "contextWindow": 1000000,
+            "maxTokens": 64000,
+            "reasoning": true
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "openai/gemini-3.8-flash",
+      "utilityModel": "openai/gemini-3.8-flash-low",
+      "timeoutSeconds": 600
+    }
+  }
+}
