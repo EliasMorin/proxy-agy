@@ -163,12 +163,12 @@ class TestToolsSupport(unittest.TestCase):
         self.assertIn("mcp_server_0__tool_0", prompt)
         self.assertIn("mcp_server_13__tool_279", prompt)
 
-        # The user message must appear BEFORE or prominently separated so it is never truncated
+        # The user message must appear right after tools & protocol, immediately before Assistant
         user_pos = prompt.find("Je veux que tu créer une VM de test sur virtlab")
         tools_pos = prompt.find("### OUTILS DISPONIBLES")
         self.assertTrue(user_pos != -1)
         self.assertTrue(tools_pos != -1)
-        self.assertLess(user_pos, tools_pos, "User prompt must appear before the tools catalog to guarantee it is never truncated")
+        self.assertGreater(user_pos, tools_pos, "User prompt must appear right after tools catalog and protocol right before Assistant")
 
     def test_immediate_execution_directive_in_prompt(self):
         """Test 8: Directive must instruct immediate tool execution without preamble."""

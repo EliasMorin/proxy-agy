@@ -82,18 +82,6 @@ class AgyAdapter:
         tools_prompt = ""
         if tools:
             tool_lines = []
-            tool_lines.append(
-                "### PROTOCOLE STRICT D'APPEL D'OUTIL OPENCLAW :\n"
-                "Pour exécuter une action, produis STRICTEMENT et IMMÉDIATEMENT un bloc markdown sans texte avant :\n"
-                "```tool_call\n"
-                '{"name": "<nom_de_l_outil>", "arguments": {<arguments_en_json>}}\n'
-                "```\n"
-                "Exemple pour exécuter une commande VirtLab sur le VPS via l'outil 'exec' :\n"
-                "```tool_call\n"
-                '{"name": "exec", "arguments": {"command": "python3 /root/.openclaw/workspace/scripts/virtlab_cli.py create --template-id 4 --name 0531-10-BTS2-TEST"}}\n'
-                "```\n"
-                "Ne tente JAMAIS d'exécuter la commande toi-même en tâche de fond. Émets le bloc ```tool_call dès qu'une action est requise."
-            )
             tool_lines.append("### OUTILS DISPONIBLES (SIGNATURES COMPACTES)")
             tool_lines.append("Tu disposes des outils suivants exécutables par OpenClaw sur le VPS :")
 
@@ -134,15 +122,25 @@ class AgyAdapter:
                 else:
                     tool_lines.append(f"- **{name}**({sig})")
 
+            tool_lines.append(
+                "\n### PROTOCOLE STRICT D'APPEL D'OUTIL OPENCLAW :\n"
+                "Pour exécuter une action, produis STRICTEMENT et IMMÉDIATEMENT un bloc markdown sans texte avant :\n"
+                "```tool_call\n"
+                '{"name": "<nom_de_l_outil>", "arguments": {<arguments_en_json>}}\n'
+                "```\n"
+                "Exemple pour exécuter une commande VirtLab sur le VPS via l'outil 'exec' :\n"
+                "```tool_call\n"
+                '{"name": "exec", "arguments": {"command": "python3 /root/.openclaw/workspace/scripts/virtlab_cli.py create --template-id 4 --name 0531-10-BTS2-TEST"}}\n'
+                "```\n"
+                "Ne tente JAMAIS d'exécuter la commande toi-même en tâche de fond. Émets le bloc ```tool_call dès qu'une action est requise."
+            )
             tools_prompt = "\n".join(tool_lines)
 
         # If resuming an existing agy conversation, only send the latest user message
         if is_resuming:
             for msg in reversed(messages):
                 if msg.role == "user":
-                    resuming_prompt = f"{directive}\n\n### User Request\n{msg.get_text_content()}"
-                    if tools_prompt:
-                        resuming_prompt = f"{directive}\n\n### User Request\n{msg.get_text_content()}\n\n{tools_prompt}\n\nAssistant:"
+                    resuming_prompt = f"{directive}\n\n{tools_prompt}\n\n### User Request\n{msg.get_text_content()}\n\nAssistant:"
                     return resuming_prompt
             latest_content = messages[-1].get_text_content()
             return f"{directive}\n\n{latest_content}"
@@ -186,6 +184,9 @@ class AgyAdapter:
         if system_prompts:
             prompt_parts.append("### System Instructions\n" + "\n\n".join(system_prompts))
 
+        if tools_prompt:
+            prompt_parts.append(tools_prompt)
+
         if conversation_turns:
             # If there's only 1 turn and it's user, format cleanly
             if len(conversation_turns) == 1 and conversation_turns[0].startswith("User: "):
@@ -208,9 +209,6 @@ class AgyAdapter:
                     history_text = "\n\n".join(conversation_turns)
 
                 prompt_parts.append("### Conversation History\n" + history_text)
-
-        if tools_prompt:
-            prompt_parts.append(tools_prompt)
 
         prompt_parts.append("Assistant:")
         return "\n\n".join(prompt_parts)
