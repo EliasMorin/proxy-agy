@@ -72,48 +72,77 @@ class AgyAdapter:
             return ""
 
         directive = (
-            "[SYSTEM DIRECTIVE: Tu es le moteur d'intelligence artificielle de Jarvis au sein de la plateforme OpenClaw. "
-            "Tu opères dans une architecture agentique où OpenClaw est l'environnement d'exécution principal. "
-            "RÈGLE STRICTE : N'exécute AUCUN outil en tâche de fond dans ton processus interne. "
-            "Pour toute action système, commande shell, gestion de VirtLab ou accès fichier, "
-            "délègue immédiatement l'exécution à OpenClaw en générant un bloc d'appel d'outil ```tool_call. "
-            "OpenClaw interceptera ton appel, l'exécutera sur le VPS, affichera le résultat à l'utilisateur dans le webchat, "
-            "et te transmettra la réponse pour la suite.]"
+            "[SYSTEM DIRECTIVE: Tu es l'intelligence artificielle de Jarvis au sein d'OpenClaw sur le VPS. "
+            "RÈGLE STRICTE D'ACTION IMMÉDIATE : Pour toute action système, commande shell, gestion VirtLab ou manipulation de fichier, "
+            "tu génères DIRECTEMENT et IMMÉDIATEMENT le bloc markdown ```tool_call sans bavardage ni préambule. "
+            "N'exécute AUCUN outil en tâche de fond dans ton processus interne. "
+            "OpenClaw intercepte ton appel ```tool_call, l'exécute sur le VPS et affiche la carte d'action à l'utilisateur.]"
         )
 
         tools_prompt = ""
         if tools:
             tool_lines = []
-            tool_lines.append("### OUTILS DISPONIBLES (TOOLS)")
-            tool_lines.append("Tu disposes des outils suivants pour interagir avec le VPS et les services :")
-            for t in tools:
-                fn = t.get("function", {}) if isinstance(t, dict) else {}
-                name = fn.get("name") or t.get("name", "unknown")
-                desc = fn.get("description") or t.get("description", "")
-                params = fn.get("parameters") or t.get("parameters", {})
-                tool_lines.append(f"- **{name}**: {desc}\n  Paramètres: {json.dumps(params, ensure_ascii=False)}")
-
             tool_lines.append(
-                "\n### PROTOCOLE STRICT D'APPEL D'OUTIL OPENCLAW :\n"
-                "Pour exécuter une action, produis STRICTEMENT et immédiatement un bloc markdown :\n"
+                "### PROTOCOLE STRICT D'APPEL D'OUTIL OPENCLAW :\n"
+                "Pour exécuter une action, produis STRICTEMENT et IMMÉDIATEMENT un bloc markdown sans texte avant :\n"
                 "```tool_call\n"
                 '{"name": "<nom_de_l_outil>", "arguments": {<arguments_en_json>}}\n'
                 "```\n"
-                "Exemple pour lancer une commande shell sur le VPS :\n"
+                "Exemple pour exécuter une commande VirtLab sur le VPS via l'outil 'exec' :\n"
                 "```tool_call\n"
                 '{"name": "exec", "arguments": {"command": "python3 /root/.openclaw/workspace/scripts/virtlab_cli.py create --template-id 4 --name 0531-10-BTS2-TEST"}}\n'
                 "```\n"
                 "Ne tente JAMAIS d'exécuter la commande toi-même en tâche de fond. Émets le bloc ```tool_call dès qu'une action est requise."
             )
-            tools_prompt = "\n\n".join(tool_lines)
+            tool_lines.append("### OUTILS DISPONIBLES (SIGNATURES COMPACTES)")
+            tool_lines.append("Tu disposes des outils suivants exécutables par OpenClaw sur le VPS :")
+
+            # Prioritize core VPS execution tools at the top
+            core_tool_names = {"exec", "bash", "read_file", "write_file", "edit_file", "browser"}
+            core_tools = []
+            other_tools = []
+            for t in tools:
+                fn = t.get("function", {}) if isinstance(t, dict) else {}
+                name = fn.get("name") or t.get("name", "unknown")
+                if name in core_tool_names:
+                    core_tools.append(t)
+                else:
+                    other_tools.append(t)
+
+            for t in (core_tools + other_tools):
+                fn = t.get("function", {}) if isinstance(t, dict) else {}
+                name = fn.get("name") or t.get("name", "unknown")
+                raw_desc = fn.get("description") or t.get("description", "")
+                first_line_desc = raw_desc.strip().split("\n")[0][:60].strip() if raw_desc else ""
+
+                params = fn.get("parameters") or t.get("parameters", {})
+                props = params.get("properties", {}) if isinstance(params, dict) else {}
+                required_props = set(params.get("required", [])) if isinstance(params, dict) else set()
+
+                param_signatures = []
+                if required_props:
+                    for p_name in props.keys():
+                        if p_name in required_props:
+                            param_signatures.append(f"{p_name}*")
+                else:
+                    for p_name in list(props.keys())[:2]:
+                        param_signatures.append(p_name)
+
+                sig = ", ".join(param_signatures)
+                if first_line_desc:
+                    tool_lines.append(f"- **{name}**({sig}): {first_line_desc}")
+                else:
+                    tool_lines.append(f"- **{name}**({sig})")
+
+            tools_prompt = "\n".join(tool_lines)
 
         # If resuming an existing agy conversation, only send the latest user message
         if is_resuming:
             for msg in reversed(messages):
                 if msg.role == "user":
-                    resuming_prompt = f"{directive}\n\n{msg.get_text_content()}"
+                    resuming_prompt = f"{directive}\n\n### User Request\n{msg.get_text_content()}"
                     if tools_prompt:
-                        resuming_prompt = f"{directive}\n\n{tools_prompt}\n\n{msg.get_text_content()}"
+                        resuming_prompt = f"{directive}\n\n### User Request\n{msg.get_text_content()}\n\n{tools_prompt}\n\nAssistant:"
                     return resuming_prompt
             latest_content = messages[-1].get_text_content()
             return f"{directive}\n\n{latest_content}"
@@ -154,8 +183,6 @@ class AgyAdapter:
                 conversation_turns.append(f"{msg.role.capitalize()}: {content}")
 
         prompt_parts = [directive]
-        if tools_prompt:
-            prompt_parts.append(tools_prompt)
         if system_prompts:
             prompt_parts.append("### System Instructions\n" + "\n\n".join(system_prompts))
 
@@ -163,10 +190,7 @@ class AgyAdapter:
             # If there's only 1 turn and it's user, format cleanly
             if len(conversation_turns) == 1 and conversation_turns[0].startswith("User: "):
                 user_text = conversation_turns[0][len("User: "):]
-                if system_prompts or tools_prompt:
-                    prompt_parts.append(f"### User Request\n{user_text}")
-                else:
-                    prompt_parts.append(user_text)
+                prompt_parts.append(f"### User Request\n{user_text}")
             else:
                 max_history_chars = 300000
                 total_len = sum(len(t) for t in conversation_turns)
@@ -183,8 +207,12 @@ class AgyAdapter:
                 else:
                     history_text = "\n\n".join(conversation_turns)
 
-                prompt_parts.append("### Conversation History\n" + history_text + "\n\nAssistant:")
+                prompt_parts.append("### Conversation History\n" + history_text)
 
+        if tools_prompt:
+            prompt_parts.append(tools_prompt)
+
+        prompt_parts.append("Assistant:")
         return "\n\n".join(prompt_parts)
 
     def extract_tool_calls(self, text: str) -> Tuple[str, List[ToolCall]]:

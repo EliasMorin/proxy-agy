@@ -103,6 +103,8 @@ async def chat_completions(
                 has_error = False
                 buffering_tool = False
                 tool_buffer = []
+                has_emitted_payload = False
+                has_emitted_tool_calls = False
 
                 async for event in agy_adapter.run_stream(
                     messages=req.messages,
@@ -134,6 +136,7 @@ async def chat_completions(
                                     pre_text = delta_text[:start_idx]
                                     tool_part = delta_text[start_idx:]
                                     if pre_text:
+                                        has_emitted_payload = True
                                         chunk = ChatCompletionChunk(
                                             id=req_id,
                                             created=created_time,
@@ -153,6 +156,8 @@ async def chat_completions(
                                 tool_buffer.append(delta_text)
                                 continue
 
+                        if delta_text:
+                            has_emitted_payload = True
                         chunk = ChatCompletionChunk(
                             id=req_id,
                             created=created_time,
@@ -213,6 +218,7 @@ async def chat_completions(
                             auth_manager.is_authenticated = False
                             auth_manager.login_message = err_msg
 
+                        has_emitted_payload = True
                         error_chunk = ChatCompletionChunk(
                             id=req_id,
                             created=created_time,
@@ -221,19 +227,19 @@ async def chat_completions(
                                 ChatCompletionChunkChoice(
                                     index=0,
                                     delta=DeltaMessage(content=f"\n[Error: {err_msg}]\n"),
-                                    finish_reason="error"
+                                    finish_reason=None
                                 )
                             ]
                         )
                         yield f"data: {error_chunk.model_dump_json(exclude_none=True)}\n\n"
 
                 # If tools were buffered, extract and emit tool calls
-                finish_reason = "stop" if not has_error else "error"
                 if req.tools and tool_buffer:
                     buffered_raw = "".join(tool_buffer)
                     _, tool_calls = agy_adapter.extract_tool_calls(buffered_raw)
                     if tool_calls:
-                        finish_reason = "tool_calls"
+                        has_emitted_tool_calls = True
+                        has_emitted_payload = True
                         tc_chunk = ChatCompletionChunk(
                             id=req_id,
                             created=created_time,
@@ -249,6 +255,7 @@ async def chat_completions(
                         yield f"data: {tc_chunk.model_dump_json(exclude_none=True)}\n\n"
                     else:
                         # Flush buffered text if not parsed as tool calls
+                        has_emitted_payload = True
                         flush_chunk = ChatCompletionChunk(
                             id=req_id,
                             created=created_time,
@@ -262,6 +269,25 @@ async def chat_completions(
                             ]
                         )
                         yield f"data: {flush_chunk.model_dump_json(exclude_none=True)}\n\n"
+
+                # If no payload or tool call was emitted at all, provide a fallback content chunk
+                # so downstream clients like OpenClaw / LiteLLM never fail on "empty response detected"
+                if not has_emitted_payload and not has_emitted_tool_calls and not has_error:
+                    fallback_chunk = ChatCompletionChunk(
+                        id=req_id,
+                        created=created_time,
+                        model=req.model,
+                        choices=[
+                            ChatCompletionChunkChoice(
+                                index=0,
+                                delta=DeltaMessage(content="Action terminée."),
+                                finish_reason=None
+                            )
+                        ]
+                    )
+                    yield f"data: {fallback_chunk.model_dump_json(exclude_none=True)}\n\n"
+
+                finish_reason = "tool_calls" if has_emitted_tool_calls else "stop"
 
                 # Final finish chunk
                 finish_chunk = ChatCompletionChunk(

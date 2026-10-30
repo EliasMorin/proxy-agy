@@ -127,6 +127,58 @@ class TestToolsSupport(unittest.TestCase):
         args = adapter.build_cli_args(prompt="test", tools=tools)
         self.assertNotIn("--dangerously-skip-permissions", args)
 
+    def test_tools_catalog_compaction_with_280_tools(self):
+        """Test 7: 280 tools with verbose schemas must be compacted to under 25KB."""
+        adapter = AgyAdapter()
+        tools_280 = []
+        for i in range(280):
+            tools_280.append({
+                "type": "function",
+                "function": {
+                    "name": f"mcp_server_{i // 20}__tool_{i}",
+                    "description": f"Detailed description for tool {i}.\nThis is line 2 with extra explanations.\nLine 3.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "arg1": {"type": "string", "description": "Argument 1 verbose details"},
+                            "arg2": {"type": "integer", "description": "Argument 2 verbose details"},
+                            "optional_flag": {"type": "boolean", "description": "Optional flag description"}
+                        },
+                        "required": ["arg1", "arg2"],
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "additionalProperties": False
+                    }
+                }
+            })
+
+        messages = [
+            ChatMessage(role="user", content="Je veux que tu créer une VM de test sur virtlab et que tu t'y connectes directement")
+        ]
+        prompt = adapter.format_messages_to_prompt(messages, tools=tools_280)
+
+        # The prompt with 280 tools must be compact (< 25,000 characters) to avoid agy input truncation
+        self.assertLess(len(prompt), 25000)
+
+        # All tools must still be listed with their names
+        self.assertIn("mcp_server_0__tool_0", prompt)
+        self.assertIn("mcp_server_13__tool_279", prompt)
+
+        # The user message must appear BEFORE or prominently separated so it is never truncated
+        user_pos = prompt.find("Je veux que tu créer une VM de test sur virtlab")
+        tools_pos = prompt.find("### OUTILS DISPONIBLES")
+        self.assertTrue(user_pos != -1)
+        self.assertTrue(tools_pos != -1)
+        self.assertLess(user_pos, tools_pos, "User prompt must appear before the tools catalog to guarantee it is never truncated")
+
+    def test_immediate_execution_directive_in_prompt(self):
+        """Test 8: Directive must instruct immediate tool execution without preamble."""
+        adapter = AgyAdapter()
+        messages = [ChatMessage(role="user", content="Test")]
+        tools = [{"type": "function", "function": {"name": "exec"}}]
+        prompt = adapter.format_messages_to_prompt(messages, tools=tools)
+        self.assertIn("```tool_call", prompt)
+        self.assertIn("immédiatement", prompt.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
