@@ -72,10 +72,13 @@ class AgyAdapter:
             return ""
 
         directive = (
-            "[SYSTEM DIRECTIVE: Tu es Jarvis, l'assistant et agent IA d'exécution autonome d'Elias sur ce serveur VPS. "
-            "Tu es pro-actif, direct et efficace. Tu as accès à l'ensemble du système et des outils disponibles. "
-            "Lorsque l'utilisateur demande une action, un test, une commande, une création de VM ou une opération technique, "
-            "utilise directement les outils mis à ta disposition pour l'exécuter immédiatement.]"
+            "[SYSTEM DIRECTIVE: Tu es le moteur d'intelligence artificielle de Jarvis au sein de la plateforme OpenClaw. "
+            "Tu opères dans une architecture agentique où OpenClaw est l'environnement d'exécution principal. "
+            "RÈGLE STRICTE : N'exécute AUCUN outil en tâche de fond dans ton processus interne. "
+            "Pour toute action système, commande shell, gestion de VirtLab ou accès fichier, "
+            "délègue immédiatement l'exécution à OpenClaw en générant un bloc d'appel d'outil ```tool_call. "
+            "OpenClaw interceptera ton appel, l'exécutera sur le VPS, affichera le résultat à l'utilisateur dans le webchat, "
+            "et te transmettra la réponse pour la suite.]"
         )
 
         tools_prompt = ""
@@ -91,12 +94,16 @@ class AgyAdapter:
                 tool_lines.append(f"- **{name}**: {desc}\n  Paramètres: {json.dumps(params, ensure_ascii=False)}")
 
             tool_lines.append(
-                "\n### PROTOCOLE STRICT D'APPEL D'OUTIL :\n"
-                "Pour exécuter un outil, produis un bloc markdown au format exact suivant :\n"
+                "\n### PROTOCOLE STRICT D'APPEL D'OUTIL OPENCLAW :\n"
+                "Pour exécuter une action, produis STRICTEMENT et immédiatement un bloc markdown :\n"
                 "```tool_call\n"
-                '{"name": "<nom_outil>", "arguments": {<arguments_json>}}\n'
+                '{"name": "<nom_de_l_outil>", "arguments": {<arguments_en_json>}}\n'
                 "```\n"
-                "Tu peux inclure une brève explication avant le bloc, mais tu dois impérativement émettre le bloc ```tool_call dès qu'une action est requise."
+                "Exemple pour lancer une commande shell sur le VPS :\n"
+                "```tool_call\n"
+                '{"name": "exec", "arguments": {"command": "python3 /root/.openclaw/workspace/scripts/virtlab_cli.py create --template-id 4 --name 0531-10-BTS2-TEST"}}\n'
+                "```\n"
+                "Ne tente JAMAIS d'exécuter la commande toi-même en tâche de fond. Émets le bloc ```tool_call dès qu'une action est requise."
             )
             tools_prompt = "\n\n".join(tool_lines)
 
@@ -272,6 +279,7 @@ class AgyAdapter:
         prompt: str,
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
         conversation_id: Optional[str] = None,
         workspace_dir: Optional[str] = None,
         dangerously_skip_permissions: Optional[bool] = None,
@@ -322,8 +330,13 @@ class AgyAdapter:
         if not has_tag_in_name and eff in ("low", "medium", "high", "xhigh", "max"):
             args.extend(["--effort", eff])
 
-        skip_perms = dangerously_skip_permissions if dangerously_skip_permissions is not None else settings.DANGEROUSLY_SKIP_PERMISSIONS
-        if skip_perms:
+        # If external tools are provided by client (e.g. OpenClaw), agy acts purely as an LLM and does not execute tools internally
+        if tools:
+            allow_internal_tools = bool(dangerously_skip_permissions)
+        else:
+            allow_internal_tools = dangerously_skip_permissions if dangerously_skip_permissions is not None else settings.DANGEROUSLY_SKIP_PERMISSIONS
+
+        if allow_internal_tools:
             args.append("--dangerously-skip-permissions")
 
         if settings.DISABLE_SLASH_COMMANDS:
@@ -367,6 +380,7 @@ class AgyAdapter:
             prompt=prompt,
             model=model,
             effort=effort,
+            tools=tools,
             conversation_id=conversation_id,
             workspace_dir=workspace_dir,
             dangerously_skip_permissions=dangerously_skip_permissions,

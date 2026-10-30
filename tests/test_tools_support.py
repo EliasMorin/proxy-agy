@@ -120,6 +120,13 @@ class TestToolsSupport(unittest.TestCase):
         self.assertEqual(args["command"], "python3 /root/virtlab_cli.py vms")
         self.assertNotIn("```tool_call", clean_text)
 
+    def test_build_cli_args_without_internal_permissions_when_tools_passed(self):
+        """Test 6: When external tools are provided by OpenClaw, agy CLI should NOT have --dangerously-skip-permissions."""
+        adapter = AgyAdapter()
+        tools = [{"type": "function", "function": {"name": "exec"}}]
+        args = adapter.build_cli_args(prompt="test", tools=tools)
+        self.assertNotIn("--dangerously-skip-permissions", args)
+
 
 if __name__ == "__main__":
     unittest.main()

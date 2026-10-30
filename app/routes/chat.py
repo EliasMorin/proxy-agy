@@ -121,10 +121,35 @@ async def chat_completions(
 
                         # If tools are defined, check for tool call markup
                         if req.tools:
-                            if "```tool_call" in delta_text or "<tool_call>" in delta_text:
-                                buffering_tool = True
+                            if not buffering_tool:
+                                start_idx = -1
+                                for marker in ["```tool_call", "```tool-call", "```tool_calls", "<tool_call>"]:
+                                    idx = delta_text.find(marker)
+                                    if idx != -1:
+                                        if start_idx == -1 or idx < start_idx:
+                                            start_idx = idx
 
-                            if buffering_tool:
+                                if start_idx != -1:
+                                    buffering_tool = True
+                                    pre_text = delta_text[:start_idx]
+                                    tool_part = delta_text[start_idx:]
+                                    if pre_text:
+                                        chunk = ChatCompletionChunk(
+                                            id=req_id,
+                                            created=created_time,
+                                            model=req.model,
+                                            choices=[
+                                                ChatCompletionChunkChoice(
+                                                    index=0,
+                                                    delta=DeltaMessage(content=pre_text),
+                                                    finish_reason=None
+                                                )
+                                            ]
+                                        )
+                                        yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+                                    tool_buffer.append(tool_part)
+                                    continue
+                            else:
                                 tool_buffer.append(delta_text)
                                 continue
 
