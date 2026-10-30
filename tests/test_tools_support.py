@@ -179,6 +179,54 @@ class TestToolsSupport(unittest.TestCase):
         self.assertIn("```tool_call", prompt)
         self.assertIn("immédiatement", prompt.lower())
 
+    def test_tool_call_streaming_buffer_logic(self):
+        """Test 9: Verify that tool call markers split across chunks are correctly detected without leaking as text."""
+        markers = ["```tool_call", "```tool-call", "```tool_calls", "<tool_call>"]
+
+        def is_potential_tool_prefix(s: str) -> bool:
+            s_clean = s.lstrip()
+            if not s_clean:
+                return True
+            for m in markers:
+                if m.startswith(s_clean) or s_clean.startswith(m):
+                    return True
+            return False
+
+        # Simulate chunks that arrive in pieces: ["\n", "``", "`", "tool", "_call\n", '{"name": "exec"}', "\n```"]
+        chunks = ["\n", "``", "`", "tool", "_call\n", '{"name": "exec", "arguments": {"command": "uptime"}}', "\n```"]
+        tool_buffer = []
+        buffering_tool = False
+        emitted_content = []
+
+        for delta_text in chunks:
+            if not buffering_tool:
+                tool_buffer.append(delta_text)
+                accumulated = "".join(tool_buffer)
+                if any(m in accumulated for m in markers):
+                    buffering_tool = True
+                    first_m_idx = min(accumulated.find(m) for m in markers if m in accumulated)
+                    pre_text = accumulated[:first_m_idx]
+                    if pre_text.strip():
+                        emitted_content.append(pre_text)
+                    tool_buffer = [accumulated[first_m_idx:]]
+                    continue
+                if is_potential_tool_prefix(accumulated):
+                    continue
+                else:
+                    emitted_content.append(accumulated)
+                    tool_buffer.clear()
+            else:
+                tool_buffer.append(delta_text)
+
+        # Buffer must have successfully detected tool call and buffered the entire tool block
+        self.assertTrue(buffering_tool)
+        self.assertEqual(len(emitted_content), 0, "No markdown code block should have leaked into text content")
+        full_tool_text = "".join(tool_buffer)
+        adapter = AgyAdapter()
+        clean_text, tool_calls = adapter.extract_tool_calls(full_tool_text)
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0].function.name, "exec")
+
 
 if __name__ == "__main__":
     unittest.main()

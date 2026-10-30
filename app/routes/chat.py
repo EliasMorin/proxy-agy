@@ -99,10 +99,22 @@ async def chat_completions(
                 )
                 yield f"data: {first_chunk.model_dump_json(exclude_none=True)}\n\n"
 
+                markers = ["```tool_call", "```tool-call", "```tool_calls", "<tool_call>"]
+
+                def is_potential_tool_prefix(s: str) -> bool:
+                    s_clean = s.lstrip()
+                    if not s_clean:
+                        return True
+                    for m in markers:
+                        if m.startswith(s_clean) or s_clean.startswith(m):
+                            return True
+                    return False
+
                 final_usage = UsageInfo()
                 has_error = False
                 buffering_tool = False
                 tool_buffer = []
+                flushed_regular_text = False
                 has_emitted_payload = False
                 has_emitted_tool_calls = False
 
@@ -121,21 +133,18 @@ async def chat_completions(
                     if event_type == "content":
                         delta_text = event.get("delta", "")
 
-                        # If tools are defined, check for tool call markup
+                        # If tools are defined, check for tool call markup across chunk boundaries
                         if req.tools:
-                            if not buffering_tool:
-                                start_idx = -1
-                                for marker in ["```tool_call", "```tool-call", "```tool_calls", "<tool_call>"]:
-                                    idx = delta_text.find(marker)
-                                    if idx != -1:
-                                        if start_idx == -1 or idx < start_idx:
-                                            start_idx = idx
+                            if not buffering_tool and not flushed_regular_text:
+                                tool_buffer.append(delta_text)
+                                accumulated = "".join(tool_buffer)
 
-                                if start_idx != -1:
+                                # Check if a marker has appeared anywhere in accumulated text
+                                if any(m in accumulated for m in markers):
                                     buffering_tool = True
-                                    pre_text = delta_text[:start_idx]
-                                    tool_part = delta_text[start_idx:]
-                                    if pre_text:
+                                    first_m_idx = min(accumulated.find(m) for m in markers if m in accumulated)
+                                    pre_text = accumulated[:first_m_idx]
+                                    if pre_text.strip():
                                         has_emitted_payload = True
                                         chunk = ChatCompletionChunk(
                                             id=req_id,
@@ -150,9 +159,32 @@ async def chat_completions(
                                             ]
                                         )
                                         yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
-                                    tool_buffer.append(tool_part)
+                                    tool_buffer = [accumulated[first_m_idx:]]
                                     continue
-                            else:
+
+                                # If still possibly a prefix of a tool call marker, continue buffering
+                                if is_potential_tool_prefix(accumulated):
+                                    continue
+                                else:
+                                    # Not a tool call! Flush accumulated text as regular content
+                                    flushed_regular_text = True
+                                    has_emitted_payload = True
+                                    chunk = ChatCompletionChunk(
+                                        id=req_id,
+                                        created=created_time,
+                                        model=req.model,
+                                        choices=[
+                                            ChatCompletionChunkChoice(
+                                                index=0,
+                                                delta=DeltaMessage(content=accumulated),
+                                                finish_reason=None
+                                            )
+                                        ]
+                                    )
+                                    yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+                                    tool_buffer.clear()
+                                    continue
+                            elif buffering_tool:
                                 tool_buffer.append(delta_text)
                                 continue
 
