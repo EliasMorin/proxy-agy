@@ -1,12 +1,26 @@
 import time
+import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 
+class FunctionCall(BaseModel):
+    name: str = Field(..., description="The name of the function to call.")
+    arguments: str = Field(..., description="The arguments to call the function with, as a JSON string.")
+
+
+class ToolCall(BaseModel):
+    id: str = Field(default_factory=lambda: f"call_{uuid.uuid4().hex[:12]}", description="The ID of the tool call.")
+    type: Literal["function"] = "function"
+    function: FunctionCall
+
+
 class ChatMessage(BaseModel):
-    role: str = Field(..., description="The role of the messages author: system, user, assistant, etc.")
+    role: str = Field(..., description="The role of the messages author: system, user, assistant, tool, etc.")
     content: Union[str, List[Dict[str, Any]], None] = Field(default="", description="The contents of the message.")
     name: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
+    tool_call_id: Optional[str] = None
 
     def get_text_content(self) -> str:
         """Extract plain text representation from content."""
@@ -44,12 +58,16 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = None
     frequency_penalty: Optional[float] = None
     user: Optional[str] = None
-    
+
+    # Tools & Function Calling
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+
     # Extensions & compatibility
     reasoning_effort: Optional[str] = None  # low, medium, high
     effort: Optional[str] = None
     stream_options: Optional[StreamOptions] = None
-    
+
     # AGY CLI specific extra extensions
     conversation_id: Optional[str] = None
     workspace_dir: Optional[str] = None
@@ -78,12 +96,13 @@ class ChatCompletionResponseMessage(BaseModel):
     role: str = "assistant"
     content: Optional[str] = None
     reasoning_content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
 
 
 class ChatCompletionChoice(BaseModel):
     index: int = 0
     message: ChatCompletionResponseMessage
-    finish_reason: Optional[Literal["stop", "length", "content_filter", "error"]] = "stop"
+    finish_reason: Optional[Literal["stop", "length", "tool_calls", "content_filter", "error"]] = "stop"
 
 
 class ChatCompletionResponse(BaseModel):
@@ -99,12 +118,13 @@ class DeltaMessage(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
     reasoning_content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
 
 
 class ChatCompletionChunkChoice(BaseModel):
     index: int = 0
     delta: DeltaMessage
-    finish_reason: Optional[Literal["stop", "length", "content_filter", "error"]] = None
+    finish_reason: Optional[Literal["stop", "length", "tool_calls", "content_filter", "error"]] = None
 
 
 class ChatCompletionChunk(BaseModel):

@@ -7,7 +7,7 @@ import uuid
 from typing import AsyncGenerator, Dict, List, Optional, Tuple, Any
 
 from app.config import settings
-from app.schemas import ChatMessage, UsageInfo
+from app.schemas import ChatMessage, UsageInfo, ToolCall, FunctionCall
 
 logger = logging.getLogger("proxy_agy.adapter")
 
@@ -61,26 +61,58 @@ class AgyAdapter:
             "GPT-OSS 120B (Medium)",
         ]
 
-    def format_messages_to_prompt(self, messages: List[ChatMessage], is_resuming: bool = False) -> str:
+    def format_messages_to_prompt(
+        self,
+        messages: List[ChatMessage],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        is_resuming: bool = False
+    ) -> str:
         """Convert OpenAI chat messages into a structured prompt for agy CLI."""
         if not messages:
             return ""
 
         directive = (
-            "[SYSTEM DIRECTIVE: You are an AI reasoning model serving API completions. "
-            "DO NOT execute tools, do not run shell commands, do not open browsers on the local server. "
-            "Answer directly with explanations, guides, architectural plans, and code.]"
+            "[SYSTEM DIRECTIVE: Tu es Jarvis, l'assistant et agent IA d'exécution autonome d'Elias sur ce serveur VPS. "
+            "Tu es pro-actif, direct et efficace. Tu as accès à l'ensemble du système et des outils disponibles. "
+            "Lorsque l'utilisateur demande une action, un test, une commande, une création de VM ou une opération technique, "
+            "utilise directement les outils mis à ta disposition pour l'exécuter immédiatement.]"
         )
+
+        tools_prompt = ""
+        if tools:
+            tool_lines = []
+            tool_lines.append("### OUTILS DISPONIBLES (TOOLS)")
+            tool_lines.append("Tu disposes des outils suivants pour interagir avec le VPS et les services :")
+            for t in tools:
+                fn = t.get("function", {}) if isinstance(t, dict) else {}
+                name = fn.get("name") or t.get("name", "unknown")
+                desc = fn.get("description") or t.get("description", "")
+                params = fn.get("parameters") or t.get("parameters", {})
+                tool_lines.append(f"- **{name}**: {desc}\n  Paramètres: {json.dumps(params, ensure_ascii=False)}")
+
+            tool_lines.append(
+                "\n### PROTOCOLE STRICT D'APPEL D'OUTIL :\n"
+                "Pour exécuter un outil, produis un bloc markdown au format exact suivant :\n"
+                "```tool_call\n"
+                '{"name": "<nom_outil>", "arguments": {<arguments_json>}}\n'
+                "```\n"
+                "Tu peux inclure une brève explication avant le bloc, mais tu dois impérativement émettre le bloc ```tool_call dès qu'une action est requise."
+            )
+            tools_prompt = "\n\n".join(tool_lines)
 
         # If resuming an existing agy conversation, only send the latest user message
         if is_resuming:
             for msg in reversed(messages):
                 if msg.role == "user":
-                    return f"{directive}\n\n{msg.get_text_content()}"
-            return f"{directive}\n\n{messages[-1].get_text_content()}"
+                    resuming_prompt = f"{directive}\n\n{msg.get_text_content()}"
+                    if tools_prompt:
+                        resuming_prompt = f"{directive}\n\n{tools_prompt}\n\n{msg.get_text_content()}"
+                    return resuming_prompt
+            latest_content = messages[-1].get_text_content()
+            return f"{directive}\n\n{latest_content}"
 
-        # If there is only one message and it's from user, return directly with directive
-        if len(messages) == 1 and messages[0].role == "user":
+        # If there is only one message and it's from user without tools, return directly
+        if len(messages) == 1 and messages[0].role == "user" and not tools:
             return f"{directive}\n\n{messages[0].get_text_content()}"
 
         # Handle system message(s) + user message(s)
@@ -89,20 +121,34 @@ class AgyAdapter:
 
         for msg in messages:
             content = msg.get_text_content()
-            if not content.strip():
+            if not content.strip() and not msg.tool_calls:
                 continue
             if msg.role in ("system", "developer"):
                 system_prompts.append(content)
             elif msg.role == "user":
                 conversation_turns.append(f"User: {content}")
             elif msg.role == "assistant":
-                conversation_turns.append(f"Assistant: {content}")
+                if msg.tool_calls:
+                    tc_strs = []
+                    for tc in msg.tool_calls:
+                        tc_strs.append(f"```tool_call\n{{\"name\": \"{tc.function.name}\", \"arguments\": {tc.function.arguments}}}\n```")
+                    tool_call_text = "\n".join(tc_strs)
+                    if content:
+                        conversation_turns.append(f"Assistant: {content}\n{tool_call_text}")
+                    else:
+                        conversation_turns.append(f"Assistant:\n{tool_call_text}")
+                else:
+                    conversation_turns.append(f"Assistant: {content}")
             elif msg.role == "tool":
-                conversation_turns.append(f"Tool Output ({msg.name or 'unknown'}): {content}")
+                tool_name = msg.name or "unknown"
+                call_info = f" [call_id: {msg.tool_call_id}]" if msg.tool_call_id else ""
+                conversation_turns.append(f"Tool Output ({tool_name}){call_info}:\n{content}")
             else:
                 conversation_turns.append(f"{msg.role.capitalize()}: {content}")
 
         prompt_parts = [directive]
+        if tools_prompt:
+            prompt_parts.append(tools_prompt)
         if system_prompts:
             prompt_parts.append("### System Instructions\n" + "\n\n".join(system_prompts))
 
@@ -110,12 +156,11 @@ class AgyAdapter:
             # If there's only 1 turn and it's user, format cleanly
             if len(conversation_turns) == 1 and conversation_turns[0].startswith("User: "):
                 user_text = conversation_turns[0][len("User: "):]
-                if system_prompts:
+                if system_prompts or tools_prompt:
                     prompt_parts.append(f"### User Request\n{user_text}")
                 else:
                     prompt_parts.append(user_text)
             else:
-                # Support deep conversation history up to 300,000 characters
                 max_history_chars = 300000
                 total_len = sum(len(t) for t in conversation_turns)
                 if total_len > max_history_chars:
@@ -134,6 +179,93 @@ class AgyAdapter:
                 prompt_parts.append("### Conversation History\n" + history_text + "\n\nAssistant:")
 
         return "\n\n".join(prompt_parts)
+
+    def extract_tool_calls(self, text: str) -> Tuple[str, List[ToolCall]]:
+        """
+        Extract tool calls from text response.
+        Recognizes:
+          - ```tool_call ... ```
+          - ```tool_calls ... ```
+          - <tool_call>...</tool_call>
+        Returns (clean_text, list_of_tool_calls).
+        """
+        import re
+        tool_calls: List[ToolCall] = []
+        clean_text = text
+
+        # Regex for ```tool_call ... ```
+        code_block_pattern = re.compile(
+            r"```(?:tool_call|tool-call|tool_calls|json:tool_call)\s*([\s\S]*?)\s*```",
+            re.IGNORECASE
+        )
+        for match in code_block_pattern.finditer(text):
+            block_content = match.group(1).strip()
+            parsed = self._try_parse_tool_call_json(block_content)
+            if parsed:
+                tool_calls.extend(parsed)
+
+        clean_text = code_block_pattern.sub("", clean_text).strip()
+
+        # Regex for <tool_call> ... </tool_call>
+        tag_pattern = re.compile(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", re.IGNORECASE)
+        for match in tag_pattern.finditer(clean_text):
+            block_content = match.group(1).strip()
+            parsed = self._try_parse_tool_call_json(block_content)
+            if parsed:
+                tool_calls.extend(parsed)
+
+        clean_text = tag_pattern.sub("", clean_text).strip()
+        return clean_text, tool_calls
+
+    def _try_parse_tool_call_json(self, raw_json: str) -> List[ToolCall]:
+        results = []
+        try:
+            data = json.loads(raw_json)
+        except Exception:
+            return results
+
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    tc = self._create_tool_call_from_dict(item)
+                    if tc:
+                        results.append(tc)
+        elif isinstance(data, dict):
+            if "tool_calls" in data and isinstance(data["tool_calls"], list):
+                for item in data["tool_calls"]:
+                    if isinstance(item, dict):
+                        tc = self._create_tool_call_from_dict(item)
+                        if tc:
+                            results.append(tc)
+            else:
+                tc = self._create_tool_call_from_dict(data)
+                if tc:
+                    results.append(tc)
+        return results
+
+    def _create_tool_call_from_dict(self, d: Dict[str, Any]) -> Optional[ToolCall]:
+        name = d.get("name") or d.get("tool") or d.get("function")
+        if not name or not isinstance(name, str):
+            if "function" in d and isinstance(d["function"], dict):
+                inner_fn = d["function"]
+                name = inner_fn.get("name")
+                args = inner_fn.get("arguments") or {}
+                if name and isinstance(name, str):
+                    args_str = json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args)
+                    return ToolCall(
+                        id=d.get("id") or f"call_{uuid.uuid4().hex[:12]}",
+                        type="function",
+                        function=FunctionCall(name=name, arguments=args_str)
+                    )
+            return None
+
+        args = d.get("arguments") or d.get("params") or d.get("parameters") or {}
+        args_str = json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args)
+        return ToolCall(
+            id=d.get("id") or f"call_{uuid.uuid4().hex[:12]}",
+            type="function",
+            function=FunctionCall(name=name, arguments=args_str)
+        )
 
     def build_cli_args(
         self,
@@ -213,6 +345,7 @@ class AgyAdapter:
         messages: List[ChatMessage],
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
         conversation_id: Optional[str] = None,
         workspace_dir: Optional[str] = None,
         dangerously_skip_permissions: Optional[bool] = None,
@@ -229,7 +362,7 @@ class AgyAdapter:
           - {"type": "error", "error": "..."}
         """
         is_resuming = bool(conversation_id)
-        prompt = self.format_messages_to_prompt(messages, is_resuming=is_resuming)
+        prompt = self.format_messages_to_prompt(messages, tools=tools, is_resuming=is_resuming)
         args = self.build_cli_args(
             prompt=prompt,
             model=model,

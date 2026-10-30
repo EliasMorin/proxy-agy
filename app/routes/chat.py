@@ -101,11 +101,14 @@ async def chat_completions(
 
                 final_usage = UsageInfo()
                 has_error = False
+                buffering_tool = False
+                tool_buffer = []
 
                 async for event in agy_adapter.run_stream(
                     messages=req.messages,
                     model=req.model,
                     effort=effort,
+                    tools=req.tools,
                     conversation_id=conversation_id,
                     workspace_dir=workspace_dir,
                     dangerously_skip_permissions=dangerously_skip_permissions,
@@ -115,6 +118,16 @@ async def chat_completions(
 
                     if event_type == "content":
                         delta_text = event.get("delta", "")
+
+                        # If tools are defined, check for tool call markup
+                        if req.tools:
+                            if "```tool_call" in delta_text or "<tool_call>" in delta_text:
+                                buffering_tool = True
+
+                            if buffering_tool:
+                                tool_buffer.append(delta_text)
+                                continue
+
                         chunk = ChatCompletionChunk(
                             id=req_id,
                             created=created_time,
@@ -189,6 +202,42 @@ async def chat_completions(
                         )
                         yield f"data: {error_chunk.model_dump_json(exclude_none=True)}\n\n"
 
+                # If tools were buffered, extract and emit tool calls
+                finish_reason = "stop" if not has_error else "error"
+                if req.tools and tool_buffer:
+                    buffered_raw = "".join(tool_buffer)
+                    _, tool_calls = agy_adapter.extract_tool_calls(buffered_raw)
+                    if tool_calls:
+                        finish_reason = "tool_calls"
+                        tc_chunk = ChatCompletionChunk(
+                            id=req_id,
+                            created=created_time,
+                            model=req.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    index=0,
+                                    delta=DeltaMessage(tool_calls=tool_calls),
+                                    finish_reason=None
+                                )
+                            ]
+                        )
+                        yield f"data: {tc_chunk.model_dump_json(exclude_none=True)}\n\n"
+                    else:
+                        # Flush buffered text if not parsed as tool calls
+                        flush_chunk = ChatCompletionChunk(
+                            id=req_id,
+                            created=created_time,
+                            model=req.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    index=0,
+                                    delta=DeltaMessage(content=buffered_raw),
+                                    finish_reason=None
+                                )
+                            ]
+                        )
+                        yield f"data: {flush_chunk.model_dump_json(exclude_none=True)}\n\n"
+
                 # Final finish chunk
                 finish_chunk = ChatCompletionChunk(
                     id=req_id,
@@ -198,7 +247,7 @@ async def chat_completions(
                         ChatCompletionChunkChoice(
                             index=0,
                             delta=DeltaMessage(),
-                            finish_reason="stop" if not has_error else "error"
+                            finish_reason=finish_reason
                         )
                     ],
                     usage=final_usage if (req.stream_options and req.stream_options.include_usage) else None
@@ -236,6 +285,7 @@ async def chat_completions(
         messages=req.messages,
         model=req.model,
         effort=effort,
+        tools=req.tools,
         conversation_id=conversation_id,
         workspace_dir=workspace_dir,
         dangerously_skip_permissions=dangerously_skip_permissions,
@@ -274,6 +324,9 @@ async def chat_completions(
     full_text = "".join(collected_content)
     full_reasoning = "".join(collected_reasoning) if collected_reasoning else None
 
+    clean_text, tool_calls = agy_adapter.extract_tool_calls(full_text) if req.tools else (full_text, [])
+    finish_reason = "tool_calls" if tool_calls else ("stop" if not error_msg else "error")
+
     response_data = ChatCompletionResponse(
         id=req_id,
         created=created_time,
@@ -283,10 +336,11 @@ async def chat_completions(
                 index=0,
                 message=ChatCompletionResponseMessage(
                     role="assistant",
-                    content=full_text,
-                    reasoning_content=full_reasoning if settings.INCLUDE_REASONING_CONTENT else None
+                    content=clean_text if clean_text else None,
+                    reasoning_content=full_reasoning if settings.INCLUDE_REASONING_CONTENT else None,
+                    tool_calls=tool_calls if tool_calls else None
                 ),
-                finish_reason="stop"
+                finish_reason=finish_reason
             )
         ],
         usage=final_usage
