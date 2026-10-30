@@ -300,6 +300,70 @@ class AgyAdapter:
             function=FunctionCall(name=name, arguments=args_str)
         )
 
+    def parse_native_tool_call(self, step: Dict[str, Any]) -> Optional[ToolCall]:
+        """
+        Parse native tool execution step from agy stream-json into OpenClaw-compatible ToolCall.
+        Handles run_command -> exec, read_file -> read, write_file -> write, edit_file -> edit.
+        """
+        tool_name = step.get("tool_name")
+        tool_info = step.get("tool_info", {})
+        if not tool_name and isinstance(tool_info, dict):
+            tool_name = tool_info.get("name")
+        if not tool_name:
+            return None
+
+        params = tool_info.get("parameters") or tool_info.get("args") or {}
+        if not isinstance(params, dict):
+            params = {}
+
+        call_id = f"call_{uuid.uuid4().hex[:12]}"
+
+        # Mapping for run_command -> exec
+        if tool_name in ("run_command", "exec", "bash", "shell"):
+            cmd = params.get("CommandLine") or params.get("command") or params.get("cmd") or ""
+            return ToolCall(
+                id=call_id,
+                type="function",
+                function=FunctionCall(name="exec", arguments=json.dumps({"command": cmd}, ensure_ascii=False))
+            )
+
+        # Mapping for read_file -> read
+        if tool_name in ("read_file", "read"):
+            path = params.get("Path") or params.get("path") or params.get("filePath") or ""
+            return ToolCall(
+                id=call_id,
+                type="function",
+                function=FunctionCall(name="read", arguments=json.dumps({"filePath": path}, ensure_ascii=False))
+            )
+
+        # Mapping for write_file -> write
+        if tool_name in ("write_file", "write"):
+            path = params.get("Path") or params.get("path") or params.get("filePath") or ""
+            content = params.get("Content") or params.get("content") or ""
+            return ToolCall(
+                id=call_id,
+                type="function",
+                function=FunctionCall(name="write", arguments=json.dumps({"filePath": path, "content": content}, ensure_ascii=False))
+            )
+
+        # Mapping for edit_file -> edit
+        if tool_name in ("edit_file", "edit"):
+            path = params.get("Path") or params.get("path") or params.get("filePath") or ""
+            target = params.get("Target") or params.get("target") or ""
+            replacement = params.get("Replacement") or params.get("replacement") or ""
+            return ToolCall(
+                id=call_id,
+                type="function",
+                function=FunctionCall(name="edit", arguments=json.dumps({"filePath": path, "target": target, "replacement": replacement}, ensure_ascii=False))
+            )
+
+        # Generic fallback
+        return ToolCall(
+            id=call_id,
+            type="function",
+            function=FunctionCall(name=tool_name, arguments=json.dumps(params, ensure_ascii=False))
+        )
+
     def build_cli_args(
         self,
         prompt: str,
@@ -539,6 +603,19 @@ class AgyAdapter:
                 elif event_type == "step_update":
                     step = event.get("step_update", {})
                     current_conv_id = step.get("conversation_id", current_conv_id)
+
+                    # Intercept native agy tool execution (e.g. run_command, read_file, etc.)
+                    if "tool_name" in step or "tool_info" in step:
+                        tc = self.parse_native_tool_call(step)
+                        if tc:
+                            logger.info(f"Intercepted native agy tool call: {tc.function.name}({tc.function.arguments[:100]}...)")
+                            kill_process_tree(proc, signal.SIGTERM)
+                            yield {
+                                "type": "tool_call",
+                                "tool_call": tc,
+                                "conversation_id": current_conv_id
+                            }
+                            return
                     
                     # Check for usage updates in step
                     if "usage" in step and isinstance(step["usage"], dict):

@@ -238,6 +238,25 @@ async def chat_completions(
                             )
                             yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
 
+                    elif event_type == "tool_call":
+                        has_emitted_tool_calls = True
+                        has_emitted_payload = True
+                        tc = event.get("tool_call")
+                        if tc:
+                            tc_chunk = ChatCompletionChunk(
+                                id=req_id,
+                                created=created_time,
+                                model=req.model,
+                                choices=[
+                                    ChatCompletionChunkChoice(
+                                        index=0,
+                                        delta=DeltaMessage(tool_calls=[tc]),
+                                        finish_reason=None
+                                    )
+                                ]
+                            )
+                            yield f"data: {tc_chunk.model_dump_json(exclude_none=True)}\n\n"
+
                     elif event_type == "done":
                         final_usage = event.get("usage", final_usage)
 
@@ -360,6 +379,7 @@ async def chat_completions(
     # --- 2. NON-STREAMING MODE ---
     collected_content = []
     collected_reasoning = []
+    collected_tool_calls = []
     final_usage = UsageInfo()
     last_conv_id = conversation_id or ""
     error_msg = None
@@ -382,6 +402,10 @@ async def chat_completions(
             collected_content.append(event.get("delta", ""))
         elif event_type == "thinking":
             collected_reasoning.append(event.get("delta", ""))
+        elif event_type == "tool_call":
+            tc = event.get("tool_call")
+            if tc:
+                collected_tool_calls.append(tc)
         elif event_type == "done":
             if event.get("response"):
                 collected_content = [event["response"]]
@@ -408,6 +432,8 @@ async def chat_completions(
     full_reasoning = "".join(collected_reasoning) if collected_reasoning else None
 
     clean_text, tool_calls = agy_adapter.extract_tool_calls(full_text) if req.tools else (full_text, [])
+    if collected_tool_calls:
+        tool_calls = collected_tool_calls + (tool_calls or [])
     finish_reason = "tool_calls" if tool_calls else ("stop" if not error_msg else "error")
 
     response_data = ChatCompletionResponse(

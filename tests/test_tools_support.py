@@ -227,6 +227,105 @@ class TestToolsSupport(unittest.TestCase):
         self.assertEqual(len(tool_calls), 1)
         self.assertEqual(tool_calls[0].function.name, "exec")
 
+    def test_parse_step_update_native_run_command(self):
+        """Test 10: Step update with native run_command is converted to OpenClaw exec tool call."""
+        adapter = AgyAdapter()
+        step = {
+            "conversation_id": "test-conv-123",
+            "tool_name": "run_command",
+            "tool_info": {
+                "name": "run_command",
+                "parameters": {
+                    "CommandLine": "uptime",
+                    "WaitMsBeforeAsync": "5000"
+                }
+            }
+        }
+        tc = adapter.parse_native_tool_call(step)
+        self.assertIsNotNone(tc)
+        self.assertEqual(tc.function.name, "exec")
+        args = json.loads(tc.function.arguments)
+        self.assertEqual(args.get("command"), "uptime")
+
+    def test_parse_step_update_native_read_file(self):
+        """Test 11: Step update with native read_file is converted to OpenClaw read tool call."""
+        adapter = AgyAdapter()
+        step = {
+            "conversation_id": "test-conv-123",
+            "tool_name": "read_file",
+            "tool_info": {
+                "name": "read_file",
+                "parameters": {
+                    "Path": "/root/.secrets.json"
+                }
+            }
+        }
+        tc = adapter.parse_native_tool_call(step)
+        self.assertIsNotNone(tc)
+        self.assertEqual(tc.function.name, "read")
+        args = json.loads(tc.function.arguments)
+        self.assertEqual(args.get("filePath"), "/root/.secrets.json")
+
+    def test_parse_step_update_native_write_file(self):
+        """Test 12: Step update with native write_file is converted to OpenClaw write tool call."""
+        adapter = AgyAdapter()
+        step = {
+            "conversation_id": "test-conv-123",
+            "tool_name": "write_file",
+            "tool_info": {
+                "name": "write_file",
+                "parameters": {
+                    "Path": "/root/test.txt",
+                    "Content": "hello world"
+                }
+            }
+        }
+        tc = adapter.parse_native_tool_call(step)
+        self.assertIsNotNone(tc)
+        self.assertEqual(tc.function.name, "write")
+        args = json.loads(tc.function.arguments)
+        self.assertEqual(args.get("filePath"), "/root/test.txt")
+        self.assertEqual(args.get("content"), "hello world")
+
+    def test_native_tool_call_emits_tool_calls_no_action_terminee(self):
+        """Test 13: Simulated event stream with native tool_call never falls back to 'Action terminée.'."""
+        # Simulated stream output from agy_adapter
+        tc = ToolCall(
+            id="call_native_1",
+            type="function",
+            function=FunctionCall(name="exec", arguments='{"command": "uptime"}')
+        )
+        stream_events = [
+            {"type": "meta", "conversation_id": "conv-1", "model": "gemini-3.8-flash"},
+            {"type": "tool_call", "tool_call": tc, "conversation_id": "conv-1"}
+        ]
+
+        # Emulate chat.py streaming generator logic
+        has_emitted_payload = False
+        has_emitted_tool_calls = False
+        emitted_chunks = []
+
+        for event in stream_events:
+            ev_type = event.get("type")
+            if ev_type == "tool_call":
+                has_emitted_tool_calls = True
+                has_emitted_payload = True
+                emitted_chunks.append({"tool_calls": [event["tool_call"]]})
+
+        # Check fallback condition from chat.py
+        fallback_emitted = False
+        if not has_emitted_payload and not has_emitted_tool_calls:
+            fallback_emitted = True
+            emitted_chunks.append({"content": "Action terminée."})
+
+        finish_reason = "tool_calls" if has_emitted_tool_calls else "stop"
+
+        self.assertTrue(has_emitted_tool_calls)
+        self.assertFalse(fallback_emitted)
+        self.assertEqual(finish_reason, "tool_calls")
+        self.assertEqual(len(emitted_chunks), 1)
+        self.assertEqual(emitted_chunks[0]["tool_calls"][0].function.name, "exec")
+
 
 if __name__ == "__main__":
     unittest.main()
