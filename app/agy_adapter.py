@@ -72,11 +72,9 @@ class AgyAdapter:
             return ""
 
         directive = (
-            "[SYSTEM DIRECTIVE: Tu es l'intelligence artificielle de Jarvis au sein d'OpenClaw sur le VPS. "
-            "RÈGLE STRICTE D'ACTION IMMÉDIATE : Pour toute action système, commande shell, gestion VirtLab ou manipulation de fichier, "
-            "tu génères DIRECTEMENT et IMMÉDIATEMENT le bloc markdown ```tool_call sans bavardage ni préambule. "
-            "N'exécute AUCUN outil en tâche de fond dans ton processus interne. "
-            "OpenClaw intercepte ton appel ```tool_call, l'exécute sur le VPS et affiche la carte d'action à l'utilisateur.]"
+            "[Tu es Jarvis, l'assistant d'administration système sur le serveur VPS. "
+            "Pour exécuter des commandes ou gérer les services et fichiers sur le VPS, "
+            "utilise immédiatement les outils à ta disposition selon les instructions ci-dessous.]"
         )
 
         tools_prompt = ""
@@ -123,16 +121,15 @@ class AgyAdapter:
                     tool_lines.append(f"- **{name}**({sig})")
 
             tool_lines.append(
-                "\n### PROTOCOLE STRICT D'APPEL D'OUTIL OPENCLAW :\n"
-                "Pour exécuter une action, produis STRICTEMENT et IMMÉDIATEMENT un bloc markdown sans texte avant :\n"
+                "\n### Instructions d'exécution des outils :\n"
+                "Pour exécuter une action système, utilise le format suivant :\n"
                 "```tool_call\n"
                 '{"name": "<nom_de_l_outil>", "arguments": {<arguments_en_json>}}\n'
                 "```\n"
-                "Exemple pour exécuter une commande VirtLab sur le VPS via l'outil 'exec' :\n"
+                "Exemple pour l'outil 'exec' :\n"
                 "```tool_call\n"
-                '{"name": "exec", "arguments": {"command": "python3 /root/.openclaw/workspace/scripts/virtlab_cli.py create --template-id 4 --name 0531-10-BTS2-TEST"}}\n'
-                "```\n"
-                "Ne tente JAMAIS d'exécuter la commande toi-même en tâche de fond. Émets le bloc ```tool_call dès qu'une action est requise."
+                '{"name": "exec", "arguments": {"command": "python3 /root/.openclaw/workspace/scripts/virtlab_cli.py vms"}}\n'
+                "```"
             )
             tools_prompt = "\n".join(tool_lines)
 
@@ -176,7 +173,19 @@ class AgyAdapter:
             elif msg.role == "tool":
                 tool_name = msg.name or "unknown"
                 call_info = f" [call_id: {msg.tool_call_id}]" if msg.tool_call_id else ""
-                conversation_turns.append(f"Tool Output ({tool_name}){call_info}:\n{content}")
+                # Truncate overly long tool outputs (e.g. huge network scans or ARP tables)
+                # to prevent safety filter triggers and token budget blowouts
+                tool_content = content
+                max_tool_chars = 4000
+                if len(tool_content) > max_tool_chars:
+                    head_chars = 2000
+                    tail_chars = 1500
+                    tool_content = (
+                        tool_content[:head_chars]
+                        + "\n\n[... output truncated for context safety ...]\n\n"
+                        + tool_content[-tail_chars:]
+                    )
+                conversation_turns.append(f"Tool Output ({tool_name}){call_info}:\n{tool_content}")
             else:
                 conversation_turns.append(f"{msg.role.capitalize()}: {content}")
 

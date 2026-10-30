@@ -326,6 +326,33 @@ class TestToolsSupport(unittest.TestCase):
         self.assertEqual(len(emitted_chunks), 1)
         self.assertEqual(emitted_chunks[0]["tool_calls"][0].function.name, "exec")
 
+    def test_system_directive_is_clean_and_natural(self):
+        """Test 14: System directive must be professional and not trigger Gemini prompt injection heuristic."""
+        adapter = AgyAdapter()
+        prompt = adapter.format_messages_to_prompt(
+            [ChatMessage(role="user", content="Bonjour")],
+            tools=[{"type": "function", "function": {"name": "exec"}}]
+        )
+        self.assertNotIn("RÈGLE STRICTE", prompt)
+        self.assertNotIn("sans bavardage ni préambule", prompt)
+        self.assertIn("Tu es Jarvis", prompt)
+
+    def test_tool_result_truncation(self):
+        """Test 15: Huge tool outputs (like 100k ARP sweeps) must be truncated to prevent security filter triggers."""
+        adapter = AgyAdapter()
+        huge_tool_output = "\n".join([f"10.192.31.{i} lladdr 00:00:00:00:00:00" for i in range(1000)])
+        messages = [
+            ChatMessage(role="user", content="Scan le réseau"),
+            ChatMessage(role="assistant", content=None, tool_calls=[
+                ToolCall(id="call_1", type="function", function=FunctionCall(name="exec", arguments='{"command": "arp"}'))
+            ]),
+            ChatMessage(role="tool", content=huge_tool_output, name="exec", tool_call_id="call_1"),
+            ChatMessage(role="user", content="Assigne une IP")
+        ]
+        prompt = adapter.format_messages_to_prompt(messages)
+        self.assertIn("[... output truncated for context safety ...]", prompt)
+        self.assertLess(len(prompt), 10000)
+
 
 if __name__ == "__main__":
     unittest.main()
