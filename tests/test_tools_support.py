@@ -327,7 +327,7 @@ class TestToolsSupport(unittest.TestCase):
         self.assertEqual(emitted_chunks[0]["tool_calls"][0].function.name, "exec")
 
     def test_system_directive_is_clean_and_natural(self):
-        """Test 14: System directive must be professional and not trigger Gemini prompt injection heuristic."""
+        """Test 14: System directive must be free of artificial role injection and not trigger Gemini prompt injection heuristic."""
         adapter = AgyAdapter()
         prompt = adapter.format_messages_to_prompt(
             [ChatMessage(role="user", content="Bonjour")],
@@ -335,7 +335,33 @@ class TestToolsSupport(unittest.TestCase):
         )
         self.assertNotIn("RÈGLE STRICTE", prompt)
         self.assertNotIn("sans bavardage ni préambule", prompt)
-        self.assertIn("Tu es Jarvis", prompt)
+        self.assertNotIn("Tu es Jarvis", prompt)
+        self.assertNotIn("Jarvis", prompt)
+
+    def test_transparent_pass_through_single_user_prompt(self):
+        """Test 16: Pure pass-through for single user prompt without tools."""
+        adapter = AgyAdapter()
+        user_text = "Quelle est la météo à Paris ?"
+        prompt = adapter.format_messages_to_prompt([ChatMessage(role="user", content=user_text)])
+        self.assertEqual(prompt, user_text)
+
+    def test_sliding_window_context_limitation(self):
+        """Test 17: Multi-turn history is bounded by sliding window (max 6 recent turns) to prevent prompt explosion."""
+        adapter = AgyAdapter()
+        messages = [ChatMessage(role="system", content="System instruction from OpenClaw")]
+        for i in range(20):
+            messages.append(ChatMessage(role="user", content=f"User command {i}"))
+            messages.append(ChatMessage(role="assistant", content=f"Assistant response {i}"))
+
+        prompt = adapter.format_messages_to_prompt(messages)
+        self.assertIn("System instruction from OpenClaw", prompt)
+        self.assertIn("[Earlier conversation history trimmed for context safety]", prompt)
+        # Ancient commands must have been pruned
+        self.assertNotIn("User command 0", prompt)
+        self.assertNotIn("User command 5", prompt)
+        # Recent commands must be preserved
+        self.assertIn("User command 19", prompt)
+        self.assertIn("Assistant response 19", prompt)
 
     def test_tool_result_truncation(self):
         """Test 15: Huge tool outputs (like 100k ARP sweeps) must be truncated to prevent security filter triggers."""

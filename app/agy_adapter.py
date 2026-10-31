@@ -67,21 +67,15 @@ class AgyAdapter:
         tools: Optional[List[Dict[str, Any]]] = None,
         is_resuming: bool = False
     ) -> str:
-        """Convert OpenAI chat messages into a structured prompt for agy CLI."""
+        """Convert OpenAI chat messages into a clean, direct prompt for agy CLI without artificial role injections."""
         if not messages:
             return ""
-
-        directive = (
-            "[Tu es Jarvis, l'assistant d'administration système sur le serveur VPS. "
-            "Pour exécuter des commandes ou gérer les services et fichiers sur le VPS, "
-            "utilise immédiatement les outils à ta disposition selon les instructions ci-dessous.]"
-        )
 
         tools_prompt = ""
         if tools:
             tool_lines = []
             tool_lines.append("### OUTILS DISPONIBLES (SIGNATURES COMPACTES)")
-            tool_lines.append("Tu disposes des outils suivants exécutables par OpenClaw sur le VPS :")
+            tool_lines.append("Tu disposes des outils suivants exécutables par l'environnement :")
 
             # Prioritize core VPS execution tools at the top
             core_tool_names = {"exec", "bash", "read_file", "write_file", "edit_file", "browser"}
@@ -122,13 +116,13 @@ class AgyAdapter:
 
             tool_lines.append(
                 "\n### Instructions d'exécution des outils :\n"
-                "Pour exécuter une action système, utilise le format suivant :\n"
+                "Pour exécuter une action système, utilise immédiatement le format suivant :\n"
                 "```tool_call\n"
                 '{"name": "<nom_de_l_outil>", "arguments": {<arguments_en_json>}}\n'
                 "```\n"
                 "Exemple pour l'outil 'exec' :\n"
                 "```tool_call\n"
-                '{"name": "exec", "arguments": {"command": "python3 /root/.openclaw/workspace/scripts/virtlab_cli.py vms"}}\n'
+                '{"name": "exec", "arguments": {"command": "uptime"}}\n'
                 "```"
             )
             tools_prompt = "\n".join(tool_lines)
@@ -137,14 +131,16 @@ class AgyAdapter:
         if is_resuming:
             for msg in reversed(messages):
                 if msg.role == "user":
-                    resuming_prompt = f"{directive}\n\n{tools_prompt}\n\n### User Request\n{msg.get_text_content()}\n\nAssistant:"
-                    return resuming_prompt
-            latest_content = messages[-1].get_text_content()
-            return f"{directive}\n\n{latest_content}"
+                    resuming_parts = []
+                    if tools_prompt:
+                        resuming_parts.append(tools_prompt)
+                    resuming_parts.append(f"### User Request\n{msg.get_text_content()}\n\nAssistant:")
+                    return "\n\n".join(resuming_parts)
+            return messages[-1].get_text_content()
 
-        # If there is only one message and it's from user without tools, return directly
+        # If there is only one message and it's from user without tools, return directly as transparent pass-through
         if len(messages) == 1 and messages[0].role == "user" and not tools:
-            return f"{directive}\n\n{messages[0].get_text_content()}"
+            return messages[0].get_text_content()
 
         # Handle system message(s) + user message(s)
         system_prompts = []
@@ -189,7 +185,7 @@ class AgyAdapter:
             else:
                 conversation_turns.append(f"{msg.role.capitalize()}: {content}")
 
-        prompt_parts = [directive]
+        prompt_parts = []
         if system_prompts:
             prompt_parts.append("### System Instructions\n" + "\n\n".join(system_prompts))
 
@@ -202,20 +198,28 @@ class AgyAdapter:
                 user_text = conversation_turns[0][len("User: "):]
                 prompt_parts.append(f"### User Request\n{user_text}")
             else:
-                max_history_chars = 300000
-                total_len = sum(len(t) for t in conversation_turns)
+                # Sliding window: keep up to 6 most recent turns, capped at 35,000 characters
+                # to prevent context bloating and prompt injection classification
+                max_recent_turns = 6
+                max_history_chars = 35000
+
+                selected_turns = conversation_turns[-max_recent_turns:] if len(conversation_turns) > max_recent_turns else conversation_turns
+                total_len = sum(len(t) for t in selected_turns)
+
                 if total_len > max_history_chars:
                     trimmed_turns = []
                     curr_len = 0
-                    for turn in reversed(conversation_turns):
+                    for turn in reversed(selected_turns):
                         if curr_len + len(turn) > max_history_chars and trimmed_turns:
                             break
                         trimmed_turns.append(turn)
                         curr_len += len(turn)
                     trimmed_turns.reverse()
-                    history_text = "[Earlier conversation history trimmed for context limits]\n\n" + "\n\n".join(trimmed_turns)
+                    history_text = "[Earlier conversation history trimmed for context safety]\n\n" + "\n\n".join(trimmed_turns)
+                elif len(conversation_turns) > max_recent_turns:
+                    history_text = "[Earlier conversation history trimmed for context safety]\n\n" + "\n\n".join(selected_turns)
                 else:
-                    history_text = "\n\n".join(conversation_turns)
+                    history_text = "\n\n".join(selected_turns)
 
                 prompt_parts.append("### Conversation History\n" + history_text)
 
