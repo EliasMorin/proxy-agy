@@ -142,18 +142,10 @@ class AgyAdapter:
         if len(messages) == 1 and messages[0].role == "user" and not tools:
             return messages[0].get_text_content()
 
-        # Handle system message(s) + user message(s)
-        system_prompts = []
-        conversation_turns = []
-
-        for msg in messages:
+        def format_turn(msg: ChatMessage) -> str:
             content = msg.get_text_content()
-            if not content.strip() and not msg.tool_calls:
-                continue
-            if msg.role in ("system", "developer"):
-                system_prompts.append(content)
-            elif msg.role == "user":
-                conversation_turns.append(f"User: {content}")
+            if msg.role == "user":
+                return f"User: {content}"
             elif msg.role == "assistant":
                 if msg.tool_calls:
                     tc_strs = []
@@ -161,11 +153,11 @@ class AgyAdapter:
                         tc_strs.append(f"```tool_call\n{{\"name\": \"{tc.function.name}\", \"arguments\": {tc.function.arguments}}}\n```")
                     tool_call_text = "\n".join(tc_strs)
                     if content:
-                        conversation_turns.append(f"Assistant: {content}\n{tool_call_text}")
+                        return f"Assistant: {content}\n{tool_call_text}"
                     else:
-                        conversation_turns.append(f"Assistant:\n{tool_call_text}")
+                        return f"Assistant:\n{tool_call_text}"
                 else:
-                    conversation_turns.append(f"Assistant: {content}")
+                    return f"Assistant: {content}"
             elif msg.role == "tool":
                 tool_name = msg.name or "unknown"
                 call_info = f" [call_id: {msg.tool_call_id}]" if msg.tool_call_id else ""
@@ -181,9 +173,18 @@ class AgyAdapter:
                         + "\n\n[... output truncated for context safety ...]\n\n"
                         + tool_content[-tail_chars:]
                     )
-                conversation_turns.append(f"Tool Output ({tool_name}){call_info}:\n{tool_content}")
+                return f"Tool Output ({tool_name}){call_info}:\n{tool_content}"
             else:
-                conversation_turns.append(f"{msg.role.capitalize()}: {content}")
+                return f"{msg.role.capitalize()}: {content}"
+
+        # Extract system prompts and separate active user request from prior history & tool execution
+        system_prompts = []
+        last_user_idx = -1
+        for i, msg in enumerate(messages):
+            if msg.role in ("system", "developer"):
+                system_prompts.append(msg.get_text_content())
+            elif msg.role == "user":
+                last_user_idx = i
 
         prompt_parts = []
         if system_prompts:
@@ -192,36 +193,50 @@ class AgyAdapter:
         if tools_prompt:
             prompt_parts.append(tools_prompt)
 
-        if conversation_turns:
-            # If there's only 1 turn and it's user, format cleanly
-            if len(conversation_turns) == 1 and conversation_turns[0].startswith("User: "):
-                user_text = conversation_turns[0][len("User: "):]
-                prompt_parts.append(f"### User Request\n{user_text}")
-            else:
-                # Sliding window: keep up to 6 most recent turns, capped at 35,000 characters
-                # to prevent context bloating and prompt injection classification
-                max_recent_turns = 6
-                max_history_chars = 35000
+        if last_user_idx != -1:
+            # 1. Prior conversation history before the active user request
+            prior_turns = []
+            for i in range(last_user_idx):
+                m = messages[i]
+                if m.role in ("system", "developer") or (not m.get_text_content().strip() and not m.tool_calls):
+                    continue
+                prior_turns.append(format_turn(m))
 
-                selected_turns = conversation_turns[-max_recent_turns:] if len(conversation_turns) > max_recent_turns else conversation_turns
-                total_len = sum(len(t) for t in selected_turns)
+            if prior_turns:
+                recent_prior = prior_turns[-6:] if len(prior_turns) > 6 else prior_turns
+                prior_text = "\n\n".join(recent_prior)
+                if len(prior_turns) > 6:
+                    prior_text = "[Earlier conversation history trimmed for context safety]\n\n" + prior_text
+                prompt_parts.append("### Previous Conversation\n" + prior_text)
 
-                if total_len > max_history_chars:
-                    trimmed_turns = []
-                    curr_len = 0
-                    for turn in reversed(selected_turns):
-                        if curr_len + len(turn) > max_history_chars and trimmed_turns:
-                            break
-                        trimmed_turns.append(turn)
-                        curr_len += len(turn)
-                    trimmed_turns.reverse()
-                    history_text = "[Earlier conversation history trimmed for context safety]\n\n" + "\n\n".join(trimmed_turns)
-                elif len(conversation_turns) > max_recent_turns:
-                    history_text = "[Earlier conversation history trimmed for context safety]\n\n" + "\n\n".join(selected_turns)
-                else:
-                    history_text = "\n\n".join(selected_turns)
+            # 2. Active User Request (SANCTUARIZED - NEVER DROPPED)
+            active_user_text = messages[last_user_idx].get_text_content()
+            prompt_parts.append(f"### User Request\n{active_user_text}")
 
-                prompt_parts.append("### Conversation History\n" + history_text)
+            # 3. Intermediate tool executions and results following the active user request
+            active_tool_turns = []
+            for i in range(last_user_idx + 1, len(messages)):
+                m = messages[i]
+                if not m.get_text_content().strip() and not m.tool_calls:
+                    continue
+                active_tool_turns.append(format_turn(m))
+
+            if active_tool_turns:
+                recent_tools = active_tool_turns[-8:] if len(active_tool_turns) > 8 else active_tool_turns
+                tools_history = "\n\n".join(recent_tools)
+                if len(active_tool_turns) > 8:
+                    tools_history = "[Earlier tool executions trimmed for context safety]\n\n" + tools_history
+                prompt_parts.append("### Tool Execution & Results\n" + tools_history)
+                prompt_parts.append("Poursuis la tâche demandée par l'utilisateur ci-dessus à l'aide des outils appropriés ou fournis la réponse.")
+        else:
+            # Fallback if no user message found in messages
+            all_turns = []
+            for m in messages:
+                if m.role in ("system", "developer") or (not m.get_text_content().strip() and not m.tool_calls):
+                    continue
+                all_turns.append(format_turn(m))
+            if all_turns:
+                prompt_parts.append("### Conversation History\n" + "\n\n".join(all_turns[-6:]))
 
         prompt_parts.append("Assistant:")
         return "\n\n".join(prompt_parts)

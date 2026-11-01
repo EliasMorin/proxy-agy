@@ -363,6 +363,26 @@ class TestToolsSupport(unittest.TestCase):
         self.assertIn("User command 19", prompt)
         self.assertIn("Assistant response 19", prompt)
 
+    def test_active_user_prompt_never_dropped_by_subsequent_tool_calls(self):
+        """Test 18: Even after 10 subsequent tool calls, active user request is never dropped."""
+        adapter = AgyAdapter()
+        messages = [
+            ChatMessage(role="system", content="System instruction from OpenClaw"),
+            ChatMessage(role="user", content="ba si tu peux y inscrire directement la clé ssh")
+        ]
+        for i in range(10):
+            messages.append(ChatMessage(
+                role="assistant",
+                content=None,
+                tool_calls=[ToolCall(id=f"c_{i}", type="function", function=FunctionCall(name="exec", arguments='{"command": "whoami"}'))]
+            ))
+            messages.append(ChatMessage(role="tool", content=f"output_{i}", name="exec", tool_call_id=f"c_{i}"))
+
+        prompt = adapter.format_messages_to_prompt(messages)
+        self.assertIn("### User Request", prompt)
+        self.assertIn("ba si tu peux y inscrire directement la clé ssh", prompt)
+        self.assertIn("Poursuis la tâche demandée", prompt)
+
     def test_tool_result_truncation(self):
         """Test 15: Huge tool outputs (like 100k ARP sweeps) must be truncated to prevent security filter triggers."""
         adapter = AgyAdapter()
